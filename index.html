@@ -1,0 +1,2237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CASE — Control de Inventario</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #101724;
+    --panel: #172032;
+    --panel-alt: #1D283D;
+    --border: #2C3B57;
+    --text: #E8EEFC;
+    --muted: #8592B0;
+    --accent: #4C8DFF;
+    --accent-dim: #1F3A66;
+    --bodega: #2FB6A6;
+    --viaje: #6C7BF0;
+    --danger: #E0637A;
+    --header-bg: #172032;
+    --header-text: #E8EEFC;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.display{
+    font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.04em;
+    font-weight:600; margin:0;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  button{
+    font-family:'Inter',sans-serif; cursor:pointer; border:none; border-radius:4px;
+    padding:10px 16px; font-size:14px; font-weight:600; transition:transform .08s ease, opacity .15s ease;
+  }
+  button:active{transform:scale(0.97);}
+  button:focus-visible, input:focus-visible, select:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
+  input, select, textarea{
+    font-family:'Inter',sans-serif; background:var(--panel-alt); color:var(--text);
+    border:1px solid var(--border); border-radius:4px; padding:10px 12px; font-size:14px;
+  }
+  .btn-primary{background:var(--accent); color:#FFFFFF;}
+  .btn-primary:hover{opacity:.9;}
+  .btn-secondary{background:var(--panel-alt); color:var(--text); border:1px solid var(--border);}
+  .btn-secondary:hover{background:#333830;}
+  .btn-danger{background:transparent; color:var(--danger); border:1px solid var(--danger);}
+  #app{min-height:100vh;}
+
+  /* ---- Topbar ---- */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 20px; border-bottom:2px solid var(--accent);
+    background:var(--header-bg); position:sticky; top:0; z-index:20;
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .tag{
+    background:var(--header-text); color:var(--header-bg); font-family:'IBM Plex Mono',monospace;
+    font-weight:600; font-size:11px; padding:3px 7px; border-radius:3px; letter-spacing:.05em;
+  }
+  .brand h1{font-size:19px; color:var(--header-text);}
+  .session-info{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--header-text); opacity:.9;}
+  .role-pill{
+    padding:4px 10px; border-radius:20px; font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.05em; font-family:'IBM Plex Mono',monospace;
+  }
+  .role-pill.admin{background:var(--header-text); color:var(--header-bg);}
+  .role-pill.viewer{background:rgba(255,255,255,.25); color:var(--header-text);}
+  .logo-chip{background:var(--header-bg); display:inline-flex; align-items:center; padding:10px 18px; border-radius:10px;}
+
+  /* ---- Tabs ---- */
+  .tabs{
+    display:flex; gap:2px; padding:0 20px; background:var(--panel);
+    border-bottom:1px solid var(--border); overflow-x:auto;
+  }
+  .tab-btn{
+    background:transparent; color:var(--muted); padding:12px 16px; border-radius:0;
+    border-bottom:3px solid transparent; font-size:13px; text-transform:uppercase; letter-spacing:.04em;
+    white-space:nowrap;
+  }
+  .tab-btn.active{color:var(--accent); border-bottom-color:var(--accent);}
+  .tab-btn:hover{color:var(--text);}
+
+  .content{padding:24px; max-width:1100px; margin:0 auto;}
+
+  /* ---- Login / setup ---- */
+  .center-screen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .ticket{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:32px; width:100%; max-width:400px; position:relative;
+  }
+  .ticket::before, .ticket::after{
+    content:""; position:absolute; width:18px; height:18px; background:var(--bg);
+    border-radius:50%; top:50%; margin-top:-9px;
+  }
+  .ticket::before{left:-9px;} .ticket::after{right:-9px;}
+  .ticket h2{font-size:22px; margin-bottom:4px;}
+  .ticket .sub{color:var(--muted); font-size:13px; margin-bottom:20px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em;}
+  .field input, .field select{width:100%;}
+  .err-msg{color:var(--danger); font-size:13px; margin-top:8px;}
+  .divider-or{
+    display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px;
+    margin:18px 0; text-transform:uppercase; letter-spacing:.05em;
+  }
+  .divider-or::before, .divider-or::after{content:""; flex:1; height:1px; background:var(--border);}
+
+  /* ---- Dashboard ---- */
+  .stat-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:20px;}
+  .stat-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:14px 16px;
+  }
+  .stat-card .num{font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600;}
+  .stat-card .lbl{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-top:2px;}
+  .toolbar{display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;}
+  .toolbar input, .toolbar select{flex:1; min-width:140px;}
+  table{width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--border); border-radius:6px; overflow:hidden;}
+  .table-wrap{overflow-x:auto; border-radius:6px;}
+  .table-wrap table{min-width:560px;}
+  @media (max-width:640px){
+    .content{padding:14px;}
+    .topbar{padding:12px 14px;}
+    .brand h1{font-size:15px;}
+    .toolbar{flex-direction:column;}
+    .toolbar input, .toolbar select{width:100%;}
+  }
+  th{
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted);
+    padding:10px 12px; border-bottom:1px solid var(--border); background:var(--panel-alt);
+  }
+  td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px;}
+  tr:last-child td{border-bottom:none;}
+  .status-badge{
+    display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.03em;
+  }
+  .status-badge.bodega{background:rgba(47,182,166,.18); color:var(--bodega);}
+  .status-badge.viaje{background:rgba(108,123,240,.18); color:var(--viaje);}
+  .status-badge.fuera_servicio{background:rgba(224,99,122,.18); color:var(--danger);}
+  .empty-state{text-align:center; padding:50px 20px; color:var(--muted);}
+
+  /* ---- Scan tab ---- */
+  .mode-switch{display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap;}
+  .mode-btn{
+    background:var(--panel); border:1px solid var(--border); color:var(--muted); flex:1; min-width:150px;
+  }
+  .mode-btn.active{border-color:var(--accent); color:var(--accent); background:var(--accent-dim);}
+  .scan-panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:24px; text-align:center;
+  }
+  .scan-led{
+    width:14px; height:14px; border-radius:50%; background:var(--bodega); display:inline-block; margin-right:8px;
+    box-shadow:0 0 8px var(--bodega); animation:pulse 1.6s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+  .scan-input-wrap{margin:18px auto; max-width:360px;}
+  .scan-input-wrap input{width:100%; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:16px; padding:14px;}
+  .cam-btn{
+    width:64px; height:64px; border-radius:50%; background:var(--accent); color:#FFFFFF;
+    font-size:24px; margin:10px auto; display:flex; align-items:center; justify-content:center;
+  }
+  .last-scan{
+    margin-top:16px; padding:12px; border-radius:6px; background:var(--panel-alt); font-size:13px; text-align:left;
+  }
+  .last-scan.ok{border-left:3px solid var(--bodega);}
+  .last-scan.error{border-left:3px solid var(--danger);}
+  .alta-form{max-width:420px; margin:20px auto 0; text-align:left;}
+
+  /* ---- Modal (camera) ---- */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  .modal-box{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:20px; max-width:420px; width:100%;}
+  .modal-box video, .modal-box canvas{width:100%; border-radius:6px; background:#000;}
+  .modal-close-row{display:flex; justify-content:flex-end; margin-top:14px;}
+
+  /* ---- Labels ---- */
+  .label-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:14px; margin-top:18px;}
+
+  /* ---- Calendario ---- */
+  .cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:6px;}
+  .cal-grid-header{margin-bottom:6px;}
+  .cal-weekday{text-align:center; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; padding:4px 0;}
+  .cal-cell{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; min-height:58px;
+    padding:6px; cursor:pointer; position:relative;
+  }
+  .cal-cell:hover{border-color:var(--accent);}
+  .cal-cell.cal-empty{background:transparent; border:none; cursor:default;}
+  .cal-cell.cal-today{border-color:var(--accent); border-width:2px;}
+  .cal-cell.cal-selected{background:var(--accent-dim);}
+  .cal-daynum{font-size:13px; font-weight:600;}
+  .cal-dots{position:absolute; bottom:6px; left:6px; display:flex; gap:4px;}
+  .cal-dot{width:7px; height:7px; border-radius:50%; display:inline-block;}
+  .cal-dot-event{background:var(--accent);}
+  .cal-dot-salida{background:var(--viaje);}
+  @media (max-width:640px){
+    .cal-cell{min-height:44px; padding:4px;}
+    .cal-daynum{font-size:11px;}
+  }
+  .label-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:12px; text-align:center; font-size:12px;
+  }
+  .label-card .qr-box{background:#fff; padding:8px; border-radius:4px; display:inline-block; margin-bottom:8px;}
+  .label-card .code{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); word-break:break-all;}
+  .checkbox-row{display:flex; align-items:center; gap:8px; margin-bottom:8px; justify-content:center;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #print-area, #print-area *{visibility:visible;}
+    #print-area{position:absolute; top:0; left:0; width:100%;}
+  }
+  #print-area{display:none;}
+  #print-area.show{display:block;}
+  #print-area .label-grid{grid-template-columns:repeat(3,1fr);}
+
+  .empty-cta{color:var(--muted); font-size:13px; margin-top:6px;}
+  .help-note{font-size:12px; color:var(--muted); margin-top:10px; line-height:1.5;}
+  .row-actions{display:flex; gap:6px; flex-wrap:wrap;}
+  .row-actions button{padding:6px 10px; font-size:12px; white-space:nowrap;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+(function(){
+  const DEFAULT_CATEGORIES = ['Micrófono','Pantalla LED','Cableado','Cámara','Bocina','Otro'];
+  const DEFAULT_FIREBASE_URL = 'https://prueba-inventario-75c39-default-rtdb.firebaseio.com';
+  // Llave maestra: entra como administrador sin importar los PINs que cada cliente configure.
+  // No aparece en ninguna pantalla de la app.
+  const MASTER_PIN = '8D27A51E3A';
+  const DEFAULT_LOGO_DATA_URI = "data:image/png;base64,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";
+
+  // Icono generico de respaldo (una maleta de transporte), en el color de acento activo.
+  const GENERIC_LOGO_SVG = `<svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+    <rect x="9" y="2" width="12" height="6" rx="1.5" fill="var(--accent)"/>
+    <rect x="2" y="7" width="26" height="20" rx="3" fill="var(--accent)"/>
+    <rect x="6.5" y="14" width="4" height="4" rx="1" fill="var(--bg)"/>
+    <rect x="19.5" y="14" width="4" height="4" rx="1" fill="var(--bg)"/>
+    <rect x="13" y="14" width="4" height="6" rx="1" fill="var(--bg)"/>
+  </svg>`;
+  function getLogoHtml(){
+    const b = state.config && state.config.branding;
+    if(b && b.logo){
+      return `<img src="${b.logo}" alt="Logo" style="height:32px; width:auto; flex-shrink:0; display:block;">`;
+    }
+    return GENERIC_LOGO_SVG;
+  }
+  const DEFAULT_BRAND_COLORS = { accent:'#4C8DFF', headerBg:'#172032', bg:'#101724' };
+  function hexToRgba(hex, alpha){
+    hex = (hex||'').replace('#','');
+    if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+    const r = parseInt(hex.substring(0,2),16)||0;
+    const g = parseInt(hex.substring(2,4),16)||0;
+    const bch = parseInt(hex.substring(4,6),16)||0;
+    return `rgba(${r},${g},${bch},${alpha})`;
+  }
+  function applyBranding(){
+    const b = (state.config && state.config.branding) || {};
+    const root = document.documentElement.style;
+    if(b.accent){ root.setProperty('--accent', b.accent); root.setProperty('--accent-dim', hexToRgba(b.accent, 0.18)); }
+    else{ root.removeProperty('--accent'); root.removeProperty('--accent-dim'); }
+    if(b.headerBg) root.setProperty('--header-bg', b.headerBg);
+    else root.removeProperty('--header-bg');
+    if(b.bg) root.setProperty('--bg', b.bg);
+    else root.removeProperty('--bg');
+  }
+
+  let state = {
+    loading: true,
+    firebaseDenied: false,
+    items: [],
+    log: [],
+    events: [],
+    config: null,
+    session: null, // {role:'admin'|'viewer', name}
+    tab: 'resumen',
+    scanMode: 'auto', // auto | alta
+    search: '',
+    filterCat: '',
+    filterStatus: '',
+    lastScanMsg: null, // {type:'ok'|'error', text}
+    cameraOpen: false,
+    cameraContinuous: false,
+    altaDraft: null, // {code,name,category,notes,responsable}
+    editingCode: null,
+    faultModalCode: null,
+    photoModalCode: null,
+    galleryCode: null,
+    pendingPhotos: [], // fotos temporales seleccionadas en el modal abierto (fault o evidencia)
+    calYear: new Date().getFullYear(),
+    calMonth: new Date().getMonth(), // 0-11
+    calSelected: null, // 'YYYY-MM-DD'
+    eventDraftOpen: false,
+    equipmentModalEventId: null,
+    equipmentModalSelected: {},
+    equipmentModalSearch: '',
+    importPreview: null,
+    printSelection: {},
+    loginErr: '',
+    setupErr: ''
+  };
+
+  let cameraStream = null, cameraRAFId = null;
+
+  function genId(){
+    return 'INV-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+  }
+  function nowIso(){ return new Date().toISOString(); }
+  function fmtDate(iso){
+    if(!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'}) + ' ' + d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+  }
+
+  function fbBase(){
+    return (state.config && state.config.firebaseUrl) ? state.config.firebaseUrl.replace(/\/$/,'') : null;
+  }
+  async function fbGet(path){
+    const base = fbBase();
+    if(!base) return null;
+    try{
+      const res = await fetch(base+'/'+path+'.json');
+      if(!res.ok) return null;
+      return await res.json();
+    }catch(e){ console.error('Error leyendo Firebase', e); return null; }
+  }
+  async function fbSet(path, data){
+    const base = fbBase();
+    if(!base) return false;
+    try{
+      await fetch(base+'/'+path+'.json', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+      return true;
+    }catch(e){ console.error('Error guardando en Firebase', e); return false; }
+  }
+  function itemsToObj(){
+    const o = {};
+    state.items.forEach(it => o[it.code] = it);
+    return o;
+  }
+
+  async function fetchConfigFromUrl(url){
+    if(!url) return null;
+    try{
+      const res = await fetch(url.replace(/\/$/,'') + '/config.json');
+      if(res.status === 401 || res.status === 403){
+        state.firebaseDenied = true;
+        return null;
+      }
+      if(!res.ok) return null;
+      return await res.json();
+    }catch(e){ return null; }
+  }
+  async function loadOperationalData(){
+    if(state.config && state.config.firebaseUrl){
+      const [itemsObj, logData, eventsObj] = await Promise.all([fbGet('items'), fbGet('log'), fbGet('events')]);
+      state.items = itemsObj ? Object.values(itemsObj) : [];
+      state.log = logData ? (Array.isArray(logData) ? logData : Object.values(logData)) : [];
+      state.events = eventsObj ? Object.values(eventsObj) : [];
+    }else{
+      try{
+        const [itemsRes, logRes, eventsRes] = await Promise.all([safeGet('inv-items', true), safeGet('inv-log', true), safeGet('inv-events', true)]);
+        state.items = itemsRes ? JSON.parse(itemsRes.value) : [];
+        state.log = logRes ? JSON.parse(logRes.value) : [];
+        state.events = eventsRes ? JSON.parse(eventsRes.value) : [];
+      }catch(e){
+        console.error('Error cargando datos', e);
+        state.items = []; state.log = []; state.events = [];
+      }
+    }
+  }
+  async function loadAll(){
+    // 1. Intenta cargar la configuración desde Firebase (funciona en cualquier navegador, dentro o fuera de Claude)
+    state.config = await fetchConfigFromUrl(DEFAULT_FIREBASE_URL);
+    if(state.firebaseDenied){
+      state.loading = false;
+      render();
+      return;
+    }
+
+    // 2. Si no había nada ahí (instalación vieja, o Firebase aún vacío), revisa el almacenamiento local
+    if(!state.config){
+      try{
+        const configRes = await safeGet('inv-config', true);
+        state.config = configRes ? JSON.parse(configRes.value) : null;
+      }catch(e){ state.config = null; }
+    }
+
+    if(state.config && !state.config.firebaseUrl && DEFAULT_FIREBASE_URL){
+      state.config.firebaseUrl = DEFAULT_FIREBASE_URL;
+      saveConfig();
+    }
+    if(state.config && state.config.branding === undefined){
+      // Instalación existente sin branding propio: conserva el logo que ya tenía puesto.
+      state.config.branding = { logo: DEFAULT_LOGO_DATA_URI, accent:null, headerBg:null, bg:null };
+      saveConfig();
+    }
+    applyBranding();
+
+    // Asegura que la configuración quede también en Firebase, para que cualquier navegador la vea de ahí en adelante
+    if(state.config && state.config.firebaseUrl){
+      fbSet('config', state.config);
+    }
+
+    await loadOperationalData();
+    state.loading = false;
+    render();
+  }
+  async function safeGet(key, shared){
+    try{ return await window.storage.get(key, shared); }
+    catch(e){ return null; }
+  }
+  async function saveItems(){
+    if(fbBase()){ await fbSet('items', itemsToObj()); return; }
+    try{ await window.storage.set('inv-items', JSON.stringify(state.items), true); }
+    catch(e){ console.error('No se pudo guardar items', e); }
+  }
+  async function saveLog(){
+    const trimmed = state.log.slice(0,300);
+    if(fbBase()){ await fbSet('log', trimmed); return; }
+    try{ await window.storage.set('inv-log', JSON.stringify(trimmed), true); }
+    catch(e){ console.error('No se pudo guardar historial', e); }
+  }
+  function eventsToObj(){
+    const o = {};
+    state.events.forEach(ev => o[ev.id] = ev);
+    return o;
+  }
+  async function saveEvents(){
+    if(fbBase()){ await fbSet('events', eventsToObj()); return; }
+    try{ await window.storage.set('inv-events', JSON.stringify(state.events), true); }
+    catch(e){ console.error('No se pudo guardar eventos', e); }
+  }
+  async function saveConfig(){
+    try{ await window.storage.set('inv-config', JSON.stringify(state.config), true); }
+    catch(e){ console.error('No se pudo guardar configuración localmente', e); }
+    if(fbBase()){
+      try{ await fbSet('config', state.config); }
+      catch(e){ console.error('No se pudo guardar configuración en Firebase', e); }
+    }
+  }
+  async function connectFirebase(url){
+    state.config.firebaseUrl = url.trim();
+    await saveConfig();
+    // Sube lo que ya tengas localmente para no perder nada
+    await fbSet('items', itemsToObj());
+    await fbSet('log', state.log);
+    await fbSet('events', eventsToObj());
+    render();
+  }
+  async function disconnectFirebase(){
+    state.config.firebaseUrl = '';
+    await saveConfig();
+    render();
+  }
+
+  async function handleLogoFileSelected(file){
+    try{
+      const dataUrl = await compressLogoFile(file, 240);
+      state.config.branding.logo = dataUrl;
+      await saveConfig();
+      applyBranding();
+      render();
+    }catch(e){ console.error('Error procesando el logo', e); alert('No se pudo procesar la imagen.'); }
+  }
+  async function removeLogo(){
+    if(!confirm('¿Quitar el logo actual y usar el ícono genérico?')) return;
+    state.config.branding.logo = null;
+    await saveConfig();
+    applyBranding();
+    render();
+  }
+  async function saveBrandColors(accent, headerBg, bg){
+    state.config.branding.accent = accent || null;
+    state.config.branding.headerBg = headerBg || null;
+    state.config.branding.bg = bg || null;
+    await saveConfig();
+    applyBranding();
+    render();
+  }
+  async function resetBrandColors(){
+    state.config.branding.accent = null;
+    state.config.branding.headerBg = null;
+    state.config.branding.bg = null;
+    await saveConfig();
+    applyBranding();
+    render();
+  }
+
+  function addLog(entry){
+    state.log.unshift(Object.assign({at: nowIso()}, entry));
+    saveLog();
+  }
+
+  function findItem(code){
+    return state.items.find(it => it.code === code);
+  }
+
+  // ---------------- ACTIONS ----------------
+  function doLogin(pin){
+    if(pin === MASTER_PIN){
+      state.session = {role:'admin', name:'Soporte'};
+      state.loginErr='';
+      state.tab = 'resumen';
+      render();
+      return;
+    }
+    const admin = state.config.admins.find(a => a.pin === pin);
+    if(admin){
+      state.session = {role:'admin', name: admin.name};
+      state.loginErr='';
+      state.tab = 'resumen';
+    }else{
+      state.loginErr = 'PIN incorrecto. Intenta de nuevo.';
+    }
+    render();
+  }
+  function doViewerLogin(){
+    state.session = {role:'viewer', name:'Espectador'};
+    state.tab = 'resumen';
+    render();
+  }
+  function doLogout(){
+    state.session = null;
+    render();
+  }
+  async function doSetup(admins){
+    state.config = {admins: admins, categories: DEFAULT_CATEGORIES.slice(), firebaseUrl: DEFAULT_FIREBASE_URL, branding: {logo:null, accent:null, headerBg:null, bg:null}};
+    state.loading = true;
+    render();
+    await saveConfig();
+    await loadOperationalData(); // trae el equipo/historial/calendario que ya existieran en Firebase
+    state.loading = false;
+    render();
+  }
+
+  function statusLabel(status){
+    if(status==='bodega') return 'en bodega';
+    if(status==='viaje') return 'en viaje';
+    return 'fuera de servicio';
+  }
+
+  // Procesa un código escaneado y devuelve el resultado, sin tocar la pantalla.
+  // Así se puede reutilizar tanto en un escaneo normal como en el modo continuo con cámara.
+  function processScan(code){
+    if(state.scanMode === 'alta'){
+      const existing = findItem(code);
+      if(existing){
+        return {type:'error', text:'Ese código ya está registrado como "'+existing.name+'" ('+statusLabel(existing.status)+'). Usa "Mover equipo" para cambiar su estado.'};
+      }
+      state.altaDraft = {code, name:'', category: state.config.categories[0], notes:'', responsable:'', categoryOther:''};
+      return null; // sin mensaje: se mostrará el formulario de alta
+    }
+    // Modo automático: detecta el estado actual y lo invierte
+    const item = findItem(code);
+    if(!item){
+      return {type:'error', text:'Código "'+code+'" no está registrado. Cámbiate a "Alta de equipo nuevo" para darlo de alta.'};
+    }
+    if(item.status === 'fuera_servicio'){
+      return {type:'error', text:'"'+item.name+'" está marcado como fuera de servicio'+(item.faultReason?' ('+item.faultReason+')':'')+'. Reactívalo manualmente desde la pestaña Equipo antes de moverlo.'};
+    }
+    const newStatus = item.status === 'bodega' ? 'viaje' : 'bodega';
+    item.status = newStatus;
+    item.updatedAt = nowIso();
+    saveItems();
+    addLog({code:item.code, name:item.name, action: newStatus==='viaje' ? 'salida' : 'regreso', by: state.session.name});
+    const text = newStatus==='viaje'
+      ? '"'+item.name+'" salió de bodega — ahora en viaje.'
+      : '"'+item.name+'" regresó a bodega.';
+    return {type:'ok', text};
+  }
+
+  function handleScan(code){
+    code = (code||'').trim();
+    if(!code) return;
+    const result = processScan(code);
+    if(result) state.lastScanMsg = result;
+    render();
+  }
+
+  // Usado durante el escaneo continuo con cámara: no reconstruye toda la pantalla
+  // (eso cortaría el video), solo agrega el resultado a una lista visible dentro del modal.
+  function handleScanContinuous(code){
+    const result = processScan(code);
+    if(!result) return; // en modo alta no aplica el escaneo continuo
+    const logEl = document.getElementById('cam-scan-log');
+    if(!logEl) return;
+    const div = document.createElement('div');
+    div.className = 'last-scan ' + (result.type==='ok' ? 'ok' : 'error');
+    div.style.marginBottom = '8px';
+    div.textContent = result.text;
+    logEl.prepend(div);
+    while(logEl.children.length > 8) logEl.removeChild(logEl.lastChild);
+  }
+
+  function confirmAlta(draft){
+    if(!draft.name.trim()){ return; }
+    const newItem = {
+      code: draft.code, name: draft.name.trim(), category: draft.category,
+      status: 'bodega', notes: draft.notes||'', responsable: draft.responsable||'',
+      addedAt: nowIso(), updatedAt: nowIso()
+    };
+    state.items.push(newItem);
+    saveItems();
+    addLog({code:newItem.code, name:newItem.name, action:'alta', by: state.session.name});
+    state.lastScanMsg = {type:'ok', text:'"'+newItem.name+'" registrado en bodega.'};
+    state.altaDraft = null;
+    render();
+  }
+
+  function generateNewCode(){
+    const code = genId();
+    state.altaDraft = {code, name:'', category: state.config.categories[0], notes:'', responsable:'', categoryOther:''};
+    render();
+  }
+
+  function deleteItem(code){
+    if(!confirm('¿Eliminar este equipo del inventario? Esta acción no se puede deshacer.')) return;
+    state.items = state.items.filter(it => it.code !== code);
+    saveItems();
+    render();
+  }
+
+  function openEditItem(code){
+    state.editingCode = code;
+    render();
+  }
+  function closeEdit(){
+    state.editingCode = null;
+    render();
+  }
+  function saveEditItem(fields){
+    const item = findItem(state.editingCode);
+    if(!item) return;
+    if(!fields.name.trim()){ alert('Ponle un nombre al equipo.'); return; }
+    item.name = fields.name.trim();
+    item.category = fields.category;
+    item.notes = fields.notes||'';
+    item.responsable = fields.responsable||'';
+    item.updatedAt = nowIso();
+    saveItems();
+    state.editingCode = null;
+    render();
+  }
+
+  function toggleStatus(code){
+    const item = findItem(code);
+    if(!item) return;
+    const newStatus = item.status === 'bodega' ? 'viaje' : 'bodega';
+    item.status = newStatus;
+    item.updatedAt = nowIso();
+    saveItems();
+    addLog({code:item.code, name:item.name, action: newStatus==='viaje' ? 'salida' : 'regreso', by: state.session.name});
+    render();
+  }
+
+  function openFaultModal(code){
+    state.faultModalCode = code;
+    state.pendingPhotos = [];
+    render();
+  }
+  function closeFaultModal(){
+    state.faultModalCode = null;
+    state.pendingPhotos = [];
+    render();
+  }
+  function confirmFault(reason, note){
+    const item = findItem(state.faultModalCode);
+    if(!item) return;
+    item.status = 'fuera_servicio';
+    item.faultReason = reason;
+    item.faultNote = note || '';
+    item.updatedAt = nowIso();
+    if(!item.photos) item.photos = [];
+    state.pendingPhotos.forEach(p=>{
+      item.photos.push({data:p, label:'Fuera de servicio: '+reason, at: nowIso(), by: state.session.name});
+    });
+    item.photos = item.photos.slice(-12); // limita el tamaño total por equipo
+    saveItems();
+    addLog({code:item.code, name:item.name, action:'fuera_servicio', by: state.session.name, detail: reason});
+    state.faultModalCode = null;
+    state.pendingPhotos = [];
+    render();
+  }
+  function reactivateItem(code){
+    const item = findItem(code);
+    if(!item) return;
+    if(!confirm('¿Reactivar "'+item.name+'" y regresarlo a bodega?')) return;
+    item.status = 'bodega';
+    item.faultReason = null;
+    item.faultNote = '';
+    item.updatedAt = nowIso();
+    saveItems();
+    addLog({code:item.code, name:item.name, action:'reactivado', by: state.session.name});
+    render();
+  }
+
+  // ---------------- FOTOS DE EVIDENCIA ----------------
+  function compressImageFile(file, maxDim){
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        const img = new Image();
+        img.onload = ()=>{
+          let w = img.width, h = img.height;
+          if(w > h && w > maxDim){ h = Math.round(h * (maxDim/w)); w = maxDim; }
+          else if(h > maxDim){ w = Math.round(w * (maxDim/h)); h = maxDim; }
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.6));
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  function compressLogoFile(file, maxDim){
+    // A diferencia de compressImageFile, conserva transparencia (PNG) — importante para logos.
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=>{
+        const img = new Image();
+        img.onload = ()=>{
+          let w = img.width, h = img.height;
+          if(w > h && w > maxDim){ h = Math.round(h * (maxDim/w)); w = maxDim; }
+          else if(h > maxDim){ w = Math.round(w * (maxDim/h)); h = maxDim; }
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  async function handlePhotoFilesSelected(fileList){
+    const files = Array.from(fileList).slice(0, 6 - state.pendingPhotos.length);
+    for(const file of files){
+      try{
+        const dataUrl = await compressImageFile(file, 900);
+        state.pendingPhotos.push(dataUrl);
+        render();
+      }catch(e){ console.error('Error procesando foto', e); }
+    }
+  }
+  function removePendingPhoto(index){
+    state.pendingPhotos.splice(index, 1);
+    render();
+  }
+  function openPhotoModal(code){
+    state.photoModalCode = code;
+    state.pendingPhotos = [];
+    render();
+  }
+  function closePhotoModal(){
+    state.photoModalCode = null;
+    state.pendingPhotos = [];
+    render();
+  }
+  function confirmPhotos(label){
+    const item = findItem(state.photoModalCode);
+    if(!item) return;
+    if(state.pendingPhotos.length === 0){ alert('Agrega al menos una foto.'); return; }
+    if(!item.photos) item.photos = [];
+    state.pendingPhotos.forEach(p=>{
+      item.photos.push({data:p, label: label || statusLabel(item.status), at: nowIso(), by: state.session.name});
+    });
+    item.photos = item.photos.slice(-12);
+    item.updatedAt = nowIso();
+    saveItems();
+    addLog({code:item.code, name:item.name, action:'foto', by: state.session.name, detail: label || statusLabel(item.status)});
+    state.photoModalCode = null;
+    state.pendingPhotos = [];
+    render();
+  }
+  function openGallery(code){
+    state.galleryCode = code;
+    render();
+  }
+  function closeGallery(){
+    state.galleryCode = null;
+    render();
+  }
+  function deletePhoto(code, index){
+    const item = findItem(code);
+    if(!item || !item.photos) return;
+    if(!confirm('¿Eliminar esta foto?')) return;
+    item.photos.splice(index, 1);
+    saveItems();
+    render();
+  }
+
+  // ---------------- CALENDARIO ----------------
+  function pad2(n){ return n<10 ? '0'+n : ''+n; }
+  function toDateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function eventsForDate(dateStr){
+    return state.events.filter(e=>e.date===dateStr);
+  }
+  function salidasForDate(dateStr){
+    return state.log.filter(l=>l.action==='salida' && l.at && l.at.slice(0,10)===dateStr);
+  }
+  function addCalendarEvent(fields){
+    const ev = {
+      id: genId(), date: state.calSelected, title: (fields.title||'').trim(),
+      time: fields.time||'', notes: fields.notes||'', by: state.session.name, createdAt: nowIso()
+    };
+    if(!ev.title){ alert('Ponle un título al evento.'); return; }
+    state.events.push(ev);
+    saveEvents();
+    state.eventDraftOpen = false;
+    render();
+  }
+  function deleteCalendarEvent(id){
+    if(!confirm('¿Eliminar este evento?')) return;
+    state.events = state.events.filter(e=>e.id!==id);
+    saveEvents();
+    render();
+  }
+  function changeMonth(delta){
+    let m = state.calMonth + delta;
+    let y = state.calYear;
+    if(m < 0){ m = 11; y--; }
+    if(m > 11){ m = 0; y++; }
+    state.calMonth = m; state.calYear = y;
+    state.calSelected = null;
+    state.eventDraftOpen = false;
+    render();
+  }
+
+  function openEquipmentModal(eventId){
+    const ev = state.events.find(e=>e.id===eventId);
+    if(!ev) return;
+    state.equipmentModalEventId = eventId;
+    state.equipmentModalSearch = '';
+    const selected = {};
+    (ev.equipmentCodes||[]).forEach(code=>{ selected[code] = true; });
+    state.equipmentModalSelected = selected;
+    render();
+  }
+  function closeEquipmentModal(){
+    state.equipmentModalEventId = null;
+    state.equipmentModalSelected = {};
+    render();
+  }
+  function toggleEquipmentSelection(code){
+    state.equipmentModalSelected[code] = !state.equipmentModalSelected[code];
+    render();
+  }
+  function confirmEquipmentSelection(){
+    const ev = state.events.find(e=>e.id===state.equipmentModalEventId);
+    if(!ev) return;
+    ev.equipmentCodes = Object.keys(state.equipmentModalSelected).filter(code=>state.equipmentModalSelected[code]);
+    saveEvents();
+    state.equipmentModalEventId = null;
+    state.equipmentModalSelected = {};
+    render();
+  }
+
+  // ---------------- IMPORTACIÓN POR LOTE (CSV) ----------------
+  function splitCsvLine(line){
+    const result = [];
+    let cur = '', inQuotes = false;
+    for(let i=0;i<line.length;i++){
+      const c = line[i];
+      if(inQuotes){
+        if(c === '"'){
+          if(line[i+1] === '"'){ cur += '"'; i++; }
+          else inQuotes = false;
+        }else cur += c;
+      }else{
+        if(c === '"') inQuotes = true;
+        else if(c === ','){ result.push(cur); cur=''; }
+        else cur += c;
+      }
+    }
+    result.push(cur);
+    return result;
+  }
+  function parseCsv(text){
+    const lines = text.split(/\r\n|\n|\r/).filter(l=>l.trim().length>0);
+    if(lines.length===0) return [];
+    const headers = splitCsvLine(lines[0]).map(h=>h.trim().toLowerCase());
+    const rows = [];
+    for(let i=1;i<lines.length;i++){
+      const cols = splitCsvLine(lines[i]);
+      const obj = {};
+      headers.forEach((h,idx)=>{ obj[h] = (cols[idx]||'').trim(); });
+      rows.push(obj);
+    }
+    return rows;
+  }
+  function getCsvField(row, aliases){
+    for(const a of aliases){
+      if(row[a] !== undefined && row[a] !== '') return row[a];
+    }
+    return '';
+  }
+  function rowsToPreview(rows){
+    return rows.map(r=>({
+      name: getCsvField(r, ['nombre','name']),
+      category: getCsvField(r, ['categoria','categoría','category']) || state.config.categories[0],
+      responsable: getCsvField(r, ['responsable']),
+      notes: getCsvField(r, ['notas','nota','notes']),
+      code: getCsvField(r, ['codigo','código','code'])
+    })).filter(r=>r.name);
+  }
+  function finishImportParse(parsed){
+    if(parsed.length === 0){
+      alert('No se encontró ninguna fila con nombre válido en el archivo. Revisa que la columna se llame "nombre".');
+      return;
+    }
+    state.importPreview = parsed;
+    render();
+  }
+  function handleImportFile(file){
+    const nameLower = (file.name||'').toLowerCase();
+    const isExcel = nameLower.endsWith('.xlsx') || nameLower.endsWith('.xls');
+    const reader = new FileReader();
+    reader.onerror = ()=> alert('No se pudo leer el archivo.');
+    if(isExcel){
+      reader.onload = ()=>{
+        if(typeof XLSX === 'undefined'){
+          alert('No se pudo cargar la herramienta para leer Excel. Revisa tu conexión a internet e intenta de nuevo, o sube un CSV.');
+          return;
+        }
+        try{
+          const data = new Uint8Array(reader.result);
+          const wb = XLSX.read(data, {type:'array'});
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(ws, {defval:''});
+          const rows = json.map(row=>{
+            const o = {};
+            Object.keys(row).forEach(k=>{
+              o[k.toString().trim().toLowerCase()] = (row[k]===undefined||row[k]===null) ? '' : String(row[k]).trim();
+            });
+            return o;
+          });
+          finishImportParse(rowsToPreview(rows));
+        }catch(e){
+          console.error('Error leyendo Excel', e);
+          alert('No se pudo leer el archivo de Excel. Verifica que no esté dañado o protegido con contraseña.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }else{
+      reader.onload = ()=>{
+        const rows = parseCsv(reader.result);
+        finishImportParse(rowsToPreview(rows));
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+  }
+  function cancelImport(){
+    state.importPreview = null;
+    render();
+  }
+  function confirmImport(){
+    if(!state.importPreview || state.importPreview.length===0) return;
+    const existingCodes = new Set(state.items.map(it=>it.code));
+    let addedCategory = false;
+    state.importPreview.forEach(row=>{
+      let code = row.code && row.code.trim() ? row.code.trim() : genId();
+      while(existingCodes.has(code)){ code = genId(); }
+      existingCodes.add(code);
+      const category = (row.category && row.category.trim()) ? row.category.trim() : state.config.categories[0];
+      if(!state.config.categories.includes(category)){
+        state.config.categories.push(category);
+        addedCategory = true;
+      }
+      const newItem = {
+        code, name: row.name.trim(), category, status:'bodega',
+        notes: row.notes||'', responsable: row.responsable||'',
+        addedAt: nowIso(), updatedAt: nowIso()
+      };
+      state.items.push(newItem);
+      state.log.unshift({code, name:newItem.name, action:'alta', by: state.session.name, at: nowIso()});
+    });
+    const count = state.importPreview.length;
+    saveItems();
+    saveLog();
+    if(addedCategory) saveConfig();
+    state.importPreview = null;
+    render();
+    alert(count + ' equipo(s) importado(s) correctamente. Ve a la pestaña Etiquetas para generar e imprimir sus códigos QR.');
+  }
+
+  function clearAllItems(){
+    if(state.items.length === 0){ alert('No hay equipo registrado que eliminar.'); return; }
+    const ok = confirm('¿Seguro que quieres eliminar TODO tu equipo (' + state.items.length + ' en total)? Esto no se puede deshacer. Si no has descargado un respaldo todavía, cancela y hazlo primero desde "Respaldo de datos".');
+    if(!ok) return;
+    const typed = prompt('Para confirmar, escribe ELIMINAR (en mayúsculas):');
+    if(typed !== 'ELIMINAR'){ alert('Cancelado — no se eliminó nada.'); return; }
+    const count = state.items.length;
+    state.items = [];
+    saveItems();
+    addLog({code:'—', name:'Todo el equipo ('+count+')', action:'vaciado', by: state.session.name});
+    render();
+    alert('Se eliminaron los ' + count + ' equipos. Ya puedes importar tu lista nueva.');
+  }
+
+  // ---------------- EXPORTAR / RESPALDAR DATOS ----------------
+  const EXPORT_ACTION_LABEL = {alta:'Alta', salida:'Salida a viaje', regreso:'Regreso a bodega', fuera_servicio:'Marcado fuera de servicio', reactivado:'Reactivado (a bodega)', foto:'Foto agregada', vaciado:'Inventario vaciado'};
+
+  function exportToExcel(){
+    if(typeof XLSX === 'undefined'){
+      alert('No se pudo cargar la herramienta de exportación. Revisa tu conexión a internet e intenta de nuevo.');
+      return;
+    }
+    const wb = XLSX.utils.book_new();
+
+    const itemRows = state.items.map(it=>({
+      'Código': it.code,
+      'Nombre': it.name,
+      'Categoría': it.category,
+      'Responsable': it.responsable||'',
+      'Estado': it.status==='bodega'?'En bodega':(it.status==='viaje'?'En viaje':'Fuera de servicio'),
+      'Motivo (si aplica)': it.faultReason||'',
+      'Nota fuera de servicio': it.faultNote||'',
+      'Notas': it.notes||'',
+      'Fotos adjuntas': (it.photos||[]).length,
+      'Agregado': it.addedAt ? fmtDate(it.addedAt) : '',
+      'Actualizado': it.updatedAt ? fmtDate(it.updatedAt) : ''
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemRows), 'Equipo');
+
+    const logRows = state.log.map(l=>({
+      'Fecha': fmtDate(l.at),
+      'Equipo': l.name,
+      'Código': l.code,
+      'Acción': EXPORT_ACTION_LABEL[l.action]||l.action,
+      'Detalle': l.detail||'',
+      'Por': l.by||''
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(logRows), 'Historial');
+
+    const eventRows = state.events.map(e=>({
+      'Fecha': e.date,
+      'Hora': e.time||'',
+      'Título': e.title,
+      'Notas': e.notes||'',
+      'Equipo asignado': (e.equipmentCodes||[]).map(code=>{ const it=findItem(code); return it ? it.name : code; }).join(', '),
+      'Creado por': e.by||''
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(eventRows), 'Eventos');
+
+    const catRows = state.config.categories.map(c=>({'Categoría': c}));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), 'Categorías');
+
+    const today = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, 'inventario_CASE_'+today+'.xlsx');
+  }
+
+  function downloadJsonFile(filename, dataObj){
+    const blob = new Blob([JSON.stringify(dataObj, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportFullBackup(){
+    const backup = {
+      exportedAt: nowIso(),
+      items: state.items,
+      log: state.log,
+      events: state.events,
+      categories: state.config.categories
+    };
+    const today = new Date().toISOString().slice(0,10);
+    downloadJsonFile('respaldo_completo_CASE_'+today+'.json', backup);
+  }
+
+  // ---------------- CAMERA ----------------
+  let lastContinuousCode = null;
+  let lastContinuousTime = 0;
+
+  async function openCamera(){
+    state.cameraOpen = true;
+    lastContinuousCode = null;
+    lastContinuousTime = 0;
+    render();
+    try{
+      cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      const video = document.getElementById('cam-video');
+      video.srcObject = cameraStream;
+      await video.play();
+      scanLoop();
+    }catch(e){
+      state.lastScanMsg = {type:'error', text:'No se pudo acceder a la cámara. Verifica los permisos, o usa el lector físico. Si abriste este archivo directo desde tu computadora/celular (sin pasar por Claude), algunos navegadores bloquean la cámara fuera de una página segura (https) — intenta abrirlo desde el chat de Claude.'};
+      closeCamera();
+    }
+  }
+  function scanLoop(){
+    const video = document.getElementById('cam-video');
+    const canvas = document.getElementById('cam-canvas');
+    if(!video || !canvas) return;
+    if(video.readyState === video.HAVE_ENOUGH_DATA){
+      const ctx = canvas.getContext('2d');
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+      const result = jsQR(imageData.data, imageData.width, imageData.height);
+      if(result && result.data){
+        if(state.cameraContinuous){
+          const now = Date.now();
+          if(result.data !== lastContinuousCode || (now - lastContinuousTime) > 2500){
+            lastContinuousCode = result.data;
+            lastContinuousTime = now;
+            handleScanContinuous(result.data);
+          }
+          // sigue escaneando sin cerrar la cámara
+        }else{
+          closeCamera();
+          handleScan(result.data);
+          return;
+        }
+      }
+    }
+    cameraRAFId = requestAnimationFrame(scanLoop);
+  }
+  function closeCamera(){
+    state.cameraOpen = false;
+    if(cameraRAFId) cancelAnimationFrame(cameraRAFId);
+    cameraRAFId = null;
+    if(cameraStream){
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    render();
+  }
+
+  // ---------------- RENDER HELPERS ----------------
+  function escapeHtml(s){
+    return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function renderSetup(){
+    return `
+    <div class="center-screen">
+      <div class="ticket">
+        <div class="brand" style="margin-bottom:14px; justify-content:center;"><div class="logo-chip">${getLogoHtml()}</div></div>
+        <h2>Configura CASE</h2>
+        <div class="sub">Primer uso — define los 3 administradores que podrán mover equipo</div>
+        <form id="setup-form">
+          ${[0,1,2].map(i => `
+            <div class="field">
+              <label>Administrador ${i+1} — nombre</label>
+              <input name="name${i}" required placeholder="Ej. Ana">
+            </div>
+            <div class="field">
+              <label>PIN (4 dígitos)</label>
+              <input name="pin${i}" required maxlength="8" placeholder="Ej. 4821">
+            </div>
+          `).join('<div style="height:6px"></div>')}
+          ${state.setupErr ? `<div class="err-msg">${escapeHtml(state.setupErr)}</div>` : ''}
+          <button type="submit" class="btn-primary" style="width:100%; margin-top:8px;">Guardar y continuar</button>
+        </form>
+      </div>
+    </div>`;
+  }
+
+  function renderLogin(){
+    return `
+    <div class="center-screen">
+      <div class="ticket">
+        <div class="brand" style="margin-bottom:14px; justify-content:center;"><div class="logo-chip">${getLogoHtml()}</div></div>
+        <h2>Control de Inventario</h2>
+        <div class="sub">Micrófonos · Pantallas LED · Cableado · Cámaras · Bocinas</div>
+        <form id="login-form">
+          <div class="field">
+            <label>PIN de administrador</label>
+            <input name="pin" type="password" placeholder="••••" autofocus autocomplete="off">
+          </div>
+          ${state.loginErr ? `<div class="err-msg">${escapeHtml(state.loginErr)}</div>` : ''}
+          <button type="submit" class="btn-primary" style="width:100%;">Entrar como administrador</button>
+        </form>
+        <div class="divider-or">o</div>
+        <button id="viewer-login" class="btn-secondary" style="width:100%;">Entrar solo para ver (espectador)</button>
+      </div>
+    </div>`;
+  }
+
+  function stats(){
+    const bodega = state.items.filter(i=>i.status==='bodega').length;
+    const viaje = state.items.filter(i=>i.status==='viaje').length;
+    const fuera = state.items.filter(i=>i.status==='fuera_servicio').length;
+    return {bodega, viaje, fuera, total: state.items.length};
+  }
+
+  function renderTopbar(){
+    if(!state.session) return '';
+    const s = state.session;
+    return `
+    <div class="topbar">
+      <div class="brand">${getLogoHtml()}<h1>Control de Inventario</h1></div>
+      <div class="session-info">
+        <span class="role-pill ${s.role}">${s.role === 'admin' ? 'Admin · '+escapeHtml(s.name) : 'Espectador'}</span>
+        <button id="logout-btn" class="btn-secondary" style="padding:6px 12px; font-size:12px;">Salir</button>
+      </div>
+    </div>`;
+  }
+
+  function renderTabs(){
+    const isAdmin = state.session.role === 'admin';
+    const tabs = [
+      {id:'resumen', label:'Equipo'},
+      ...(isAdmin ? [{id:'escanear', label:'Escanear'}, {id:'etiquetas', label:'Etiquetas'}] : []),
+      {id:'calendario', label:'Calendario'},
+      ...(isAdmin ? [{id:'historial', label:'Historial'}] : []),
+      ...(isAdmin ? [{id:'config', label:'Configuración'}] : [])
+    ];
+    return `<div class="tabs">${tabs.map(t=>`<button class="tab-btn ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.label}</button>`).join('')}</div>`;
+  }
+
+  function renderResumen(){
+    const st = stats();
+    let filtered = state.items.filter(it=>{
+      const q = state.search.toLowerCase();
+      const matchesSearch = !state.search || (it.name.toLowerCase().includes(q) || it.code.toLowerCase().includes(q) || (it.responsable||'').toLowerCase().includes(q) || (it.notes||'').toLowerCase().includes(q) || (it.faultNote||'').toLowerCase().includes(q));
+      const matchesCat = !state.filterCat || it.category === state.filterCat;
+      const matchesStatus = !state.filterStatus || it.status === state.filterStatus;
+      return matchesSearch && matchesCat && matchesStatus;
+    });
+    const isAdmin = state.session.role === 'admin';
+    return `
+    <div class="stat-row">
+      <div class="stat-card"><div class="num">${st.total}</div><div class="lbl">Total equipo</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--bodega)">${st.bodega}</div><div class="lbl">En bodega</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--viaje)">${st.viaje}</div><div class="lbl">En viaje</div></div>
+      <div class="stat-card"><div class="num" style="color:var(--danger)">${st.fuera}</div><div class="lbl">Fuera de servicio</div></div>
+    </div>
+    <div class="toolbar">
+      <input id="search-input" placeholder="Buscar por nombre o código..." value="${escapeHtml(state.search)}">
+      <select id="filter-cat">
+        <option value="">Todas las categorías</option>
+        ${state.config.categories.map(c=>`<option value="${escapeHtml(c)}" ${state.filterCat===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+      </select>
+      <select id="filter-status">
+        <option value="">Todos los estados</option>
+        <option value="bodega" ${state.filterStatus==='bodega'?'selected':''}>En bodega</option>
+        <option value="viaje" ${state.filterStatus==='viaje'?'selected':''}>En viaje</option>
+        <option value="fuera_servicio" ${state.filterStatus==='fuera_servicio'?'selected':''}>Fuera de servicio</option>
+      </select>
+    </div>
+    ${filtered.length === 0 ? `<div class="empty-state">No hay equipo que coincida con la búsqueda.${state.items.length===0 ? ' Aún no registras nada — ve a la pestaña Escanear para dar de alta tu primer equipo.' : ''}</div>` : `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Código</th><th>Nombre</th><th>Categoría</th><th>Responsable</th><th>Estado</th><th>Fotos</th><th>Actualizado</th>${isAdmin?'<th></th>':''}</tr></thead>
+      <tbody>
+        ${filtered.map(it=>`
+          <tr>
+            <td class="mono" style="color:var(--muted); font-size:11px;">${escapeHtml(it.code)}</td>
+            <td>${escapeHtml(it.name)}${it.notes ? `<div style="color:var(--muted); font-size:11px; margin-top:3px;">${escapeHtml(it.notes)}</div>` : ''}</td>
+            <td>${escapeHtml(it.category)}</td>
+            <td>${escapeHtml(it.responsable) || '—'}</td>
+            <td><span class="status-badge ${it.status}">${it.status==='bodega'?'En bodega':(it.status==='viaje'?'En viaje':'Fuera de servicio')}</span>${it.status==='fuera_servicio' && (it.faultReason || it.faultNote) ? `<div style="color:var(--muted); font-size:11px; margin-top:3px;">${escapeHtml(it.faultReason||'')}${it.faultReason && it.faultNote ? ' — ' : ''}${escapeHtml(it.faultNote||'')}</div>` : ''}</td>
+            <td class="row-actions">${(it.photos && it.photos.length) ? `<button class="btn-secondary" data-gallery="${escapeHtml(it.code)}">📷 Ver (${it.photos.length})</button>` : ''}${isAdmin ? `<button class="btn-secondary" data-addphoto="${escapeHtml(it.code)}">📷 Agregar</button>` : ''}</td>
+            <td style="color:var(--muted); font-size:12px;">${fmtDate(it.updatedAt)}</td>
+            ${isAdmin ? `<td class="row-actions">${
+              it.status === 'fuera_servicio'
+                ? `<button class="btn-secondary" data-reactivate="${escapeHtml(it.code)}">Reactivar (a bodega)</button>`
+                : `<button class="btn-secondary" data-toggle="${escapeHtml(it.code)}">${it.status==='bodega'?'Marcar en viaje':'Marcar en bodega'}</button><button class="btn-secondary" data-fault="${escapeHtml(it.code)}">Fuera de servicio</button>`
+            }<button class="btn-secondary" data-edit="${escapeHtml(it.code)}">Editar</button><button class="btn-danger" data-del="${escapeHtml(it.code)}">Eliminar</button></td>` : ''}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table></div>`}
+    ${state.editingCode ? renderEditModal(findItem(state.editingCode)) : ''}
+    ${state.faultModalCode ? renderFaultModal(findItem(state.faultModalCode)) : ''}
+    ${state.photoModalCode ? renderPhotoModal(findItem(state.photoModalCode)) : ''}
+    ${state.galleryCode ? renderGalleryModal(findItem(state.galleryCode)) : ''}
+    `;
+  }
+
+  function renderEscanear(){
+    const draft = state.altaDraft;
+    return `
+    <div class="mode-switch">
+      <button class="mode-btn ${state.scanMode==='auto'?'active':''}" data-mode="auto">Mover equipo (automático)</button>
+      <button class="mode-btn ${state.scanMode==='alta'?'active':''}" data-mode="alta">Alta de equipo nuevo</button>
+    </div>
+    ${draft ? renderAltaForm(draft) : `
+    <div class="scan-panel">
+      <div><span class="scan-led"></span>Listo para escanear</div>
+      ${state.scanMode==='auto' ? `<div class="help-note" style="margin-top:6px;">Detecta el estado actual: si está en bodega lo saca a viaje, si está en viaje lo regresa a bodega.</div>` : ''}
+      <div class="scan-input-wrap">
+        <input id="scan-input" class="mono" placeholder="Escanea o escribe el código..." autofocus autocomplete="off">
+      </div>
+      <div style="color:var(--muted); font-size:12px;">Con un lector físico USB/Bluetooth: apunta y dispara, el código se procesa solo, uno tras otro.</div>
+      <div class="cam-btn" id="open-camera-btn" title="Escanear con cámara">▣</div>
+      <div style="color:var(--muted); font-size:12px;">o usa la cámara del celular (solo lee códigos QR)</div>
+      ${state.scanMode==='auto' ? `
+        <div class="checkbox-row" style="justify-content:center; margin-top:14px;">
+          <input type="checkbox" id="continuous-checkbox" ${state.cameraContinuous?'checked':''}>
+          <label for="continuous-checkbox" style="font-size:13px; color:var(--muted);">Escaneo continuo con cámara (para sacar o regresar varios equipos seguidos, sin reabrirla)</label>
+        </div>
+      ` : ''}
+      ${state.scanMode==='alta' ? `<div style="margin-top:14px;"><button id="gen-code-btn" class="btn-secondary">Generar código QR nuevo</button></div>` : ''}
+      ${state.lastScanMsg ? `<div class="last-scan ${state.lastScanMsg.type==='ok'?'ok':'error'}">${escapeHtml(state.lastScanMsg.text)}</div>` : ''}
+    </div>`}
+    ${state.cameraOpen ? renderCameraModal() : ''}
+    `;
+  }
+
+  function renderAltaForm(draft){
+    return `
+    <div class="scan-panel">
+      <h3 style="font-size:16px; margin-bottom:14px;">Registrar equipo nuevo</h3>
+      <div class="alta-form">
+        <div class="field">
+          <label>Código</label>
+          <input id="alta-code" class="mono" value="${escapeHtml(draft.code)}" readonly>
+        </div>
+        <div class="field">
+          <label>Nombre del equipo</label>
+          <input id="alta-name" placeholder="Ej. Micrófono Shure SM58 #3" value="${escapeHtml(draft.name)}">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <select id="alta-category">
+            ${state.config.categories.map(c=>`<option value="${escapeHtml(c)}" ${draft.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" id="alta-category-other-wrap" style="display:${draft.category==='Otro'?'block':'none'};">
+          <label>Nombre de la nueva categoría</label>
+          <input id="alta-category-other" placeholder="Ej. Iluminación" value="${escapeHtml(draft.categoryOther||'')}">
+        </div>
+        <div class="field">
+          <label>Responsable (opcional)</label>
+          <input id="alta-responsable" placeholder="Ej. Carlos Pérez" value="${escapeHtml(draft.responsable||'')}">
+        </div>
+        <div class="field">
+          <label>Notas (opcional)</label>
+          <textarea id="alta-notes" rows="2" placeholder="Estado, accesorios, etc.">${escapeHtml(draft.notes)}</textarea>
+        </div>
+        <div id="alta-qr-preview" style="text-align:center; margin-bottom:14px;"></div>
+        <div style="display:flex; gap:10px;">
+          <button id="alta-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="alta-save" class="btn-primary" style="flex:1;">Guardar equipo</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderEditModal(item){
+    if(!item) return '';
+    return `
+    <div class="modal-overlay" id="edit-overlay">
+      <div class="modal-box">
+        <h3 style="font-size:15px; margin-bottom:14px;">Editar equipo</h3>
+        <div class="field">
+          <label>Código</label>
+          <input class="mono" value="${escapeHtml(item.code)}" readonly>
+        </div>
+        <div class="field">
+          <label>Nombre del equipo</label>
+          <input id="edit-name" value="${escapeHtml(item.name)}">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <select id="edit-category">
+            ${state.config.categories.map(c=>`<option value="${escapeHtml(c)}" ${item.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Responsable (opcional)</label>
+          <input id="edit-responsable" value="${escapeHtml(item.responsable||'')}">
+        </div>
+        <div class="field">
+          <label>Notas (opcional)</label>
+          <textarea id="edit-notes" rows="2">${escapeHtml(item.notes||'')}</textarea>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <button id="edit-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="edit-save" class="btn-primary" style="flex:1;">Guardar cambios</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderPhotoPicker(){
+    return `
+      <div class="field">
+        <label>Fotos (opcional, hasta 6)</label>
+        <input type="file" id="photo-file-input" accept="image/*" capture="environment" multiple>
+        <div id="pending-photos-preview" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          ${state.pendingPhotos.map((p,idx)=>`
+            <div style="position:relative;">
+              <img src="${p}" style="width:70px; height:70px; object-fit:cover; border-radius:6px; border:1px solid var(--border);">
+              <button data-remove-pending="${idx}" style="position:absolute; top:-6px; right:-6px; width:20px; height:20px; border-radius:50%; background:var(--danger); color:#fff; border:none; font-size:12px; line-height:1; cursor:pointer;">×</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+  }
+
+  function renderFaultModal(item){
+    if(!item) return '';
+    return `
+    <div class="modal-overlay" id="fault-overlay">
+      <div class="modal-box">
+        <h3 style="font-size:15px; margin-bottom:6px;">Marcar fuera de servicio</h3>
+        <div class="help-note" style="margin-bottom:14px;">"${escapeHtml(item.name)}" dejará de contarse en bodega o en viaje hasta que lo reactives manualmente.</div>
+        <div class="field">
+          <label>Motivo</label>
+          <select id="fault-reason">
+            <option value="Dañado">Dañado</option>
+            <option value="Perdido">Perdido</option>
+            <option value="Otro">Otro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Notas (opcional)</label>
+          <textarea id="fault-note" rows="2" placeholder="Detalles, ej. dónde se vio por última vez, qué falla tiene..."></textarea>
+        </div>
+        ${renderPhotoPicker()}
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button id="fault-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="fault-save" class="btn-primary" style="flex:1;">Confirmar</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderPhotoModal(item){
+    if(!item) return '';
+    return `
+    <div class="modal-overlay" id="photo-overlay">
+      <div class="modal-box">
+        <h3 style="font-size:15px; margin-bottom:6px;">Agregar foto de evidencia</h3>
+        <div class="help-note" style="margin-bottom:14px;">"${escapeHtml(item.name)}" — útil para dejar constancia de cómo sale o regresa el equipo.</div>
+        <div class="field">
+          <label>Etiqueta</label>
+          <select id="photo-label">
+            <option value="Salida">Salida (así sale)</option>
+            <option value="Regreso">Regreso (así llegó)</option>
+            <option value="General">Evidencia general</option>
+          </select>
+        </div>
+        ${renderPhotoPicker()}
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button id="photo-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="photo-save" class="btn-primary" style="flex:1;">Guardar foto(s)</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderGalleryModal(item){
+    if(!item) return '';
+    const photos = item.photos || [];
+    return `
+    <div class="modal-overlay" id="gallery-overlay">
+      <div class="modal-box" style="max-width:520px;">
+        <h3 style="font-size:15px; margin-bottom:14px;">Fotos de "${escapeHtml(item.name)}"</h3>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:12px; max-height:420px; overflow-y:auto;">
+          ${photos.length === 0 ? `<div class="help-note">Aún no hay fotos.</div>` : photos.slice().reverse().map((p, revIdx)=>{
+            const idx = photos.length - 1 - revIdx;
+            return `
+            <div>
+              <img src="${p.data}" style="width:100%; height:130px; object-fit:cover; border-radius:6px; border:1px solid var(--border); cursor:pointer;" data-fullphoto="${idx}" data-fullcode="${escapeHtml(item.code)}">
+              <div style="font-size:11px; color:var(--muted); margin-top:4px;">${escapeHtml(p.label||'')}<br>${fmtDate(p.at)}</div>
+              ${state.session.role==='admin' ? `<button class="btn-danger" data-delphoto="${idx}" data-delphotocode="${escapeHtml(item.code)}" style="margin-top:4px; font-size:11px; padding:4px 8px;">Eliminar</button>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="modal-close-row"><button id="gallery-close-btn" class="btn-secondary">Cerrar</button></div>
+      </div>
+    </div>`;
+  }
+
+  function renderCameraModal(){
+    return `
+    <div class="modal-overlay" id="cam-overlay">
+      <div class="modal-box">
+        <h3 style="font-size:15px; margin-bottom:10px;">${state.cameraContinuous ? 'Escaneo continuo — apunta a cada código' : 'Apunta al código QR'}</h3>
+        <video id="cam-video" playsinline muted></video>
+        <canvas id="cam-canvas" style="display:none;"></canvas>
+        ${state.cameraContinuous ? `<div id="cam-scan-log" style="margin-top:12px; max-height:180px; overflow-y:auto; text-align:left;"></div>` : ''}
+        <div class="modal-close-row"><button id="cam-close-btn" class="btn-secondary">${state.cameraContinuous ? 'Terminar' : 'Cancelar'}</button></div>
+      </div>
+    </div>`;
+  }
+
+  function renderEtiquetas(){
+    if(state.items.length===0){
+      return `<div class="empty-state">Aún no hay equipo registrado. Da de alta equipo desde la pestaña Escanear.</div>`;
+    }
+    return `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+      <div class="help-note" style="margin:0;">Selecciona el equipo al que quieras imprimirle una etiqueta QR nueva.</div>
+      <button id="print-selected-btn" class="btn-primary">Imprimir seleccionados</button>
+    </div>
+    <div class="label-grid">
+      ${state.items.map(it=>`
+        <div class="label-card">
+          <div class="checkbox-row">
+            <input type="checkbox" data-print-code="${escapeHtml(it.code)}" ${state.printSelection[it.code]?'checked':''}>
+            <span>${escapeHtml(it.name)}</span>
+          </div>
+          <div class="qr-box" id="qr-${cssSafe(it.code)}"></div>
+          <div class="code">${escapeHtml(it.code)}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div id="print-area">
+      <div class="label-grid" id="print-grid"></div>
+    </div>
+    `;
+  }
+
+  function cssSafe(s){ return s.replace(/[^a-zA-Z0-9]/g,'_'); }
+
+  const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const DIAS_SEMANA = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+
+  function renderCalendario(){
+    const isAdmin = state.session.role === 'admin';
+    const year = state.calYear, month = state.calMonth;
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month+1, 0).getDate();
+    const todayStr = toDateStr(new Date());
+
+    let cells = '';
+    for(let i=0; i<firstDay; i++){ cells += `<div class="cal-cell cal-empty"></div>`; }
+    for(let d=1; d<=daysInMonth; d++){
+      const dateStr = year+'-'+pad2(month+1)+'-'+pad2(d);
+      const evs = eventsForDate(dateStr);
+      const salidas = salidasForDate(dateStr);
+      const hasStuff = evs.length>0 || salidas.length>0;
+      cells += `
+        <div class="cal-cell ${dateStr===todayStr?'cal-today':''} ${state.calSelected===dateStr?'cal-selected':''}" data-day="${dateStr}">
+          <div class="cal-daynum">${d}</div>
+          ${hasStuff ? `<div class="cal-dots">${evs.length ? '<span class="cal-dot cal-dot-event"></span>' : ''}${salidas.length ? '<span class="cal-dot cal-dot-salida"></span>' : ''}</div>` : ''}
+        </div>`;
+    }
+
+    let detailHtml = '';
+    if(state.calSelected){
+      const evs = eventsForDate(state.calSelected);
+      const salidas = salidasForDate(state.calSelected);
+      const [y,m,dd] = state.calSelected.split('-');
+      detailHtml = `
+        <div class="scan-panel" style="text-align:left; margin-top:18px;">
+          <h3 style="font-size:15px; margin-bottom:12px;">${dd}/${m}/${y}</h3>
+          ${salidas.length ? `
+            <div style="margin-bottom:14px;">
+              <div style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Equipo que salió este día</div>
+              ${salidas.map(l=>`<div style="font-size:13px; margin-bottom:4px;">🚚 ${escapeHtml(l.name)} <span style="color:var(--muted);">(${escapeHtml(l.by||'')})</span></div>`).join('')}
+            </div>` : ''}
+          ${evs.length ? `
+            <div style="margin-bottom:10px;">
+              <div style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Eventos</div>
+              ${evs.map(e=>{
+                const assigned = (e.equipmentCodes||[]).map(code=>findItem(code)).filter(Boolean);
+                return `
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid var(--border);">
+                  <div style="flex:1;">
+                    <div style="font-size:14px; font-weight:600;">${e.time ? escapeHtml(e.time)+' — ' : ''}${escapeHtml(e.title)}</div>
+                    ${e.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">${escapeHtml(e.notes)}</div>` : ''}
+                    <div style="font-size:12px; color:var(--muted); margin-top:6px;">
+                      <strong>Equipo para este evento:</strong> ${assigned.length ? assigned.map(it=>escapeHtml(it.name)).join(', ') : 'ninguno asignado todavía'}
+                    </div>
+                    ${isAdmin ? `<button class="btn-secondary" data-assign-equipment="${e.id}" style="margin-top:6px; font-size:12px; padding:5px 10px;">Elegir equipo</button>` : ''}
+                  </div>
+                  ${isAdmin ? `<button class="btn-danger" data-delevent="${e.id}" style="font-size:11px; padding:5px 8px;">Eliminar</button>` : ''}
+                </div>
+              `;}).join('')}
+            </div>` : ''}
+          ${(!salidas.length && !evs.length) ? `<div class="help-note" style="margin-bottom:10px;">Sin eventos ni movimientos registrados este día.</div>` : ''}
+          ${isAdmin ? (
+            state.eventDraftOpen ? `
+              <div class="alta-form" style="margin:10px 0 0;">
+                <div class="field"><label>Título</label><input id="event-title" placeholder="Ej. Evento en Salón X"></div>
+                <div class="field"><label>Hora (opcional)</label><input id="event-time" placeholder="Ej. 18:00"></div>
+                <div class="field"><label>Notas (opcional)</label><textarea id="event-notes" rows="2"></textarea></div>
+                <div style="display:flex; gap:10px;">
+                  <button id="event-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+                  <button id="event-save" class="btn-primary" style="flex:1;">Guardar evento</button>
+                </div>
+              </div>
+            ` : `<button id="add-event-btn" class="btn-primary">+ Agregar evento</button>`
+          ) : ''}
+        </div>`;
+    }
+
+    return `
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+        <button id="cal-prev" class="btn-secondary">←</button>
+        <h3 style="font-size:17px;">${MESES[month]} ${year}</h3>
+        <button id="cal-next" class="btn-secondary">→</button>
+      </div>
+      <div class="cal-grid cal-grid-header">${DIAS_SEMANA.map(d=>`<div class="cal-weekday">${d}</div>`).join('')}</div>
+      <div class="cal-grid">${cells}</div>
+      <div class="help-note" style="margin-top:10px;"><span class="cal-dot cal-dot-event" style="position:relative; top:2px;"></span> evento &nbsp; <span class="cal-dot cal-dot-salida" style="position:relative; top:2px;"></span> equipo que salió</div>
+      ${detailHtml}
+      ${state.equipmentModalEventId ? renderEquipmentModal(state.events.find(e=>e.id===state.equipmentModalEventId)) : ''}
+    `;
+  }
+
+  function renderEquipmentModal(ev){
+    if(!ev) return '';
+    const q = state.equipmentModalSearch.toLowerCase();
+    const list = state.items.filter(it => !q || it.name.toLowerCase().includes(q) || it.category.toLowerCase().includes(q));
+    return `
+    <div class="modal-overlay" id="equipment-overlay">
+      <div class="modal-box" style="max-width:480px;">
+        <h3 style="font-size:15px; margin-bottom:4px;">Equipo para "${escapeHtml(ev.title)}"</h3>
+        <div class="help-note" style="margin-bottom:12px;">Marca el equipo que planeas llevar a este evento. Esto no cambia su estado real — solo es una lista de planeación.</div>
+        <input id="equipment-modal-search" placeholder="Buscar equipo..." style="width:100%; margin-bottom:12px;" value="${escapeHtml(state.equipmentModalSearch)}">
+        <div style="max-height:320px; overflow-y:auto; border:1px solid var(--border); border-radius:6px;">
+          ${list.length === 0 ? `<div class="help-note" style="padding:12px;">No hay equipo que coincida.</div>` : list.map(it=>`
+            <label style="display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--border); cursor:pointer; font-size:13px;">
+              <input type="checkbox" data-equip-code="${escapeHtml(it.code)}" ${state.equipmentModalSelected[it.code] ? 'checked' : ''}>
+              <span style="flex:1;">${escapeHtml(it.name)} <span style="color:var(--muted); font-size:11px;">(${escapeHtml(it.category)})</span></span>
+              <span class="status-badge ${it.status}" style="font-size:10px;">${it.status==='bodega'?'Bodega':(it.status==='viaje'?'Viaje':'F. servicio')}</span>
+            </label>
+          `).join('')}
+        </div>
+        <div style="display:flex; gap:10px; margin-top:14px;">
+          <button id="equipment-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="equipment-save" class="btn-primary" style="flex:1;">Guardar selección</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderHistorial(){
+    if(state.log.length===0){
+      return `<div class="empty-state">Todavía no hay movimientos registrados.</div>`;
+    }
+    const actionLabel = {alta:'Alta', salida:'Salida a viaje', regreso:'Regreso a bodega', fuera_servicio:'Marcado fuera de servicio', reactivado:'Reactivado (a bodega)', foto:'Foto agregada', vaciado:'Inventario vaciado'};
+    return `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Fecha</th><th>Equipo</th><th>Código</th><th>Acción</th><th>Por</th></tr></thead>
+      <tbody>
+        ${state.log.map(l=>`
+          <tr>
+            <td style="color:var(--muted); font-size:12px;">${fmtDate(l.at)}</td>
+            <td>${escapeHtml(l.name)}</td>
+            <td class="mono" style="color:var(--muted); font-size:11px;">${escapeHtml(l.code)}</td>
+            <td>${actionLabel[l.action]||l.action}${l.detail ? ' — '+escapeHtml(l.detail) : ''}</td>
+            <td>${escapeHtml(l.by||'—')}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table></div>`;
+  }
+
+  function renderConfig(){
+    const connected = !!(state.config.firebaseUrl);
+    const brand = state.config.branding || {logo:null, accent:null, headerBg:null, bg:null};
+    return `
+    <h3 style="margin-bottom:14px;">Marca y apariencia</h3>
+    <div class="ticket" style="max-width:520px; margin:0 0 24px; padding:20px;">
+      <div class="field">
+        <label>Logo</label>
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:10px;">
+          <div class="logo-chip">${getLogoHtml()}</div>
+          <span style="font-size:12px; color:var(--muted);">${brand.logo ? 'Logo propio cargado' : 'Usando el ícono genérico'}</span>
+        </div>
+        <input type="file" id="logo-file-input" accept="image/png,image/jpeg,image/svg+xml">
+        ${brand.logo ? `<button id="remove-logo-btn" class="btn-secondary" style="margin-top:10px;">Quitar logo</button>` : ''}
+        <div class="help-note">Sube una imagen con fondo transparente (PNG) si es posible, para que se vea bien sobre el color del encabezado.</div>
+      </div>
+      <div class="field">
+        <label>Color principal (botones y detalles)</label>
+        <input type="color" id="brand-accent" value="${brand.accent || DEFAULT_BRAND_COLORS.accent}" style="width:70px; height:38px; padding:2px;">
+      </div>
+      <div class="field">
+        <label>Color del encabezado</label>
+        <input type="color" id="brand-header" value="${brand.headerBg || DEFAULT_BRAND_COLORS.headerBg}" style="width:70px; height:38px; padding:2px;">
+      </div>
+      <div class="field">
+        <label>Color de fondo general</label>
+        <input type="color" id="brand-bg" value="${brand.bg || DEFAULT_BRAND_COLORS.bg}" style="width:70px; height:38px; padding:2px;">
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button id="save-brand-colors-btn" class="btn-primary">Guardar colores</button>
+        <button id="reset-brand-colors-btn" class="btn-secondary">Restaurar valores por defecto</button>
+      </div>
+    </div>
+    <h3 style="margin-bottom:14px;">Conexión con Telegram</h3>
+    <div class="ticket" style="max-width:520px; margin:0 0 24px; padding:20px;">
+      <div style="margin-bottom:12px;">
+        <span class="status-badge ${connected?'bodega':'viaje'}">${connected ? 'Conectado' : 'No conectado'}</span>
+      </div>
+      <div class="field">
+        <label>URL de la base de datos (Firebase)</label>
+        <input id="firebase-url-input" placeholder="https://tu-proyecto-default-rtdb.firebaseio.com" value="${escapeHtml(state.config.firebaseUrl||'')}">
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button id="save-firebase-btn" class="btn-primary">Guardar y sincronizar</button>
+        ${connected ? `<button id="disconnect-firebase-btn" class="btn-secondary">Desconectar</button>` : ''}
+      </div>
+      <div class="help-note">Pega aquí la URL que te dio Firebase al crear tu Realtime Database. En cuanto la guardes, tu bot de Telegram podrá leer el inventario. Ten en cuenta que con las reglas de "modo de prueba" cualquiera con esta URL puede ver los datos — no la compartas fuera de tu equipo.</div>
+    </div>
+    <h3 style="margin-bottom:14px;">Administradores</h3>
+    <table style="margin-bottom:24px;">
+      <thead><tr><th>Nombre</th><th>PIN</th></tr></thead>
+      <tbody>
+        ${state.config.admins.map((a,idx)=>`
+          <tr><td>${escapeHtml(a.name)}</td><td class="mono">${escapeHtml(a.pin)}</td></tr>
+        `).join('')}
+      </tbody>
+    </table>
+    <div class="help-note">Para cambiar nombres o PINs, dilo aquí en el chat y ajusto el archivo, o edítalo directo en el código de la app.</div>
+    <h3 style="margin:24px 0 14px;">Categorías</h3>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+      ${state.config.categories.map(c=>`<span class="status-badge bodega">${escapeHtml(c)}</span>`).join('')}
+    </div>
+    <form id="add-cat-form" style="display:flex; gap:10px; max-width:400px;">
+      <input name="newcat" placeholder="Nueva categoría..." style="flex:1;">
+      <button type="submit" class="btn-secondary">Agregar</button>
+    </form>
+
+    <h3 style="margin:28px 0 14px;">Respaldo de datos</h3>
+    <div class="ticket" style="max-width:520px; margin:0 0 10px; padding:20px;">
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+        <button id="export-excel-btn" class="btn-primary">📊 Descargar Excel</button>
+        <button id="export-json-btn" class="btn-secondary">🗂️ Respaldo completo (JSON)</button>
+      </div>
+      <div class="help-note">
+        <strong>Excel</strong>: equipo, historial y eventos en un archivo fácil de abrir y compartir (no incluye fotos, por tamaño).<br><br>
+        <strong>JSON</strong>: respaldo técnico con todos los datos (incluidas las fotos). Guárdalo en un lugar seguro por si algún día necesitas recuperar todo tal cual estaba.
+      </div>
+    </div>
+
+    <h3 style="margin:28px 0 14px;">Importar equipo por lote</h3>
+    ${!state.importPreview ? `
+      <div class="ticket" style="max-width:520px; margin:0; padding:20px;">
+        <div class="field">
+          <label>Archivo CSV o Excel (.xls / .xlsx)</label>
+          <input type="file" id="import-file-input" accept=".csv,.xls,.xlsx">
+        </div>
+        <div class="help-note">
+          El archivo debe tener estas columnas en la primera fila (en cualquier orden): <strong>nombre</strong> (obligatorio), <strong>categoria</strong>, <strong>responsable</strong>, <strong>notas</strong>, <strong>codigo</strong> (opcional — si lo dejas vacío, se genera uno automático).<br><br>
+          Ejemplo:<br>
+          <span class="mono">nombre,categoria,responsable,notas</span><br>
+          <span class="mono">Micrófono SM58 #4,Micrófono,Ana,</span><br><br>
+          Si usas Excel, solo asegúrate de que la primera fila tenga esos mismos nombres de columna. Se lee la primera hoja del archivo.<br><br>
+          Después de importar, ve a la pestaña <strong>Etiquetas</strong> para generar e imprimir el código QR de cada equipo nuevo.
+        </div>
+      </div>
+    ` : `
+      <div class="ticket" style="max-width:560px; margin:0; padding:20px;">
+        <div style="margin-bottom:10px;">Se encontraron <strong>${state.importPreview.length}</strong> equipo(s) en el archivo. Vista previa:</div>
+        <div class="table-wrap" style="margin-bottom:14px; max-height:260px; overflow-y:auto;">
+          <table>
+            <thead><tr><th>Nombre</th><th>Categoría</th><th>Responsable</th></tr></thead>
+            <tbody>
+              ${state.importPreview.slice(0,50).map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.category)}</td><td>${escapeHtml(r.responsable)||'—'}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${state.importPreview.length>50 ? `<div class="help-note">Mostrando los primeros 50, pero se importarán los ${state.importPreview.length}.</div>` : ''}
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button id="import-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+          <button id="import-confirm" class="btn-primary" style="flex:1;">Confirmar importación</button>
+        </div>
+      </div>
+    `}
+
+    <h3 style="margin:28px 0 14px;">Vaciar inventario</h3>
+    <div class="ticket" style="max-width:520px; margin:0; padding:20px;">
+      <div class="help-note" style="margin-bottom:14px;">Elimina de golpe todo el equipo registrado (${state.items.length} en este momento) — útil si vas a reemplazar tu lista completa por una importación nueva. El historial y el calendario no se tocan. Esta acción no se puede deshacer.</div>
+      <button id="clear-items-btn" class="btn-danger">🗑️ Eliminar todo el equipo</button>
+    </div>
+    `;
+  }
+
+  function renderApp(){
+    if(state.loading){
+      return `<div class="center-screen"><div style="color:var(--muted);">Cargando inventario...</div></div>`;
+    }
+    if(state.firebaseDenied){
+      return `
+      <div class="center-screen">
+        <div class="ticket">
+          <h2>Sin acceso a la base de datos</h2>
+          <div class="sub">Firebase rechazó la conexión — normalmente pasa cuando las reglas de acceso de "modo de prueba" vencieron.</div>
+          <div class="help-note" style="margin-bottom:16px;">Revisa en la consola de Firebase: Realtime Database → pestaña Reglas. Ahí debería decir si ya expiraron, con opción de actualizarlas. Ninguno de tus datos se borró — solo está bloqueado el acceso hasta corregir esto.</div>
+          <button id="retry-firebase-btn" class="btn-primary" style="width:100%;">Reintentar</button>
+        </div>
+      </div>`;
+    }
+    if(!state.config){
+      return renderSetup();
+    }
+    if(!state.session){
+      return renderLogin();
+    }
+    let body = '';
+    if(state.tab==='resumen') body = renderResumen();
+    else if(state.tab==='escanear') body = renderEscanear();
+    else if(state.tab==='etiquetas') body = renderEtiquetas();
+    else if(state.tab==='calendario') body = renderCalendario();
+    else if(state.tab==='historial') body = renderHistorial();
+    else if(state.tab==='config') body = renderConfig();
+    return renderTopbar() + renderTabs() + `<div class="content">${body}</div>`;
+  }
+
+  function render(){
+    document.getElementById('app').innerHTML = renderApp();
+    attachListeners();
+  }
+
+  // ---------------- LISTENERS ----------------
+  function attachListeners(){
+    const app = document.getElementById('app');
+
+    const retryFirebaseBtn = document.getElementById('retry-firebase-btn');
+    if(retryFirebaseBtn){
+      retryFirebaseBtn.addEventListener('click', ()=>{
+        state.firebaseDenied = false;
+        state.loading = true;
+        render();
+        loadAll();
+      });
+    }
+    const setupForm = document.getElementById('setup-form');
+    if(setupForm){
+      setupForm.addEventListener('submit', e=>{
+        e.preventDefault();
+        const fd = new FormData(setupForm);
+        const admins = [0,1,2].map(i=>({name: fd.get('name'+i).trim(), pin: fd.get('pin'+i).trim()}));
+        if(admins.some(a=>!a.name || !a.pin)){
+          state.setupErr = 'Completa los 3 nombres y PINs.';
+          render(); return;
+        }
+        const pins = admins.map(a=>a.pin);
+        if(new Set(pins).size !== pins.length){
+          state.setupErr = 'Los 3 PINs deben ser diferentes entre sí.';
+          render(); return;
+        }
+        state.setupErr = '';
+        doSetup(admins);
+      });
+    }
+
+    const loginForm = document.getElementById('login-form');
+    if(loginForm){
+      loginForm.addEventListener('submit', e=>{
+        e.preventDefault();
+        const pin = new FormData(loginForm).get('pin').trim();
+        doLogin(pin);
+      });
+    }
+    const viewerBtn = document.getElementById('viewer-login');
+    if(viewerBtn) viewerBtn.addEventListener('click', doViewerLogin);
+
+    const logoutBtn = document.getElementById('logout-btn');
+    if(logoutBtn) logoutBtn.addEventListener('click', doLogout);
+
+    app.querySelectorAll('.tab-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        state.tab = btn.dataset.tab;
+        state.altaDraft = null;
+        state.lastScanMsg = null;
+        render();
+      });
+    });
+
+    app.querySelectorAll('.mode-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        state.scanMode = btn.dataset.mode;
+        state.altaDraft = null;
+        state.lastScanMsg = null;
+        if(state.scanMode !== 'auto') state.cameraContinuous = false;
+        render();
+      });
+    });
+
+    const searchInput = document.getElementById('search-input');
+    if(searchInput){
+      searchInput.addEventListener('input', ()=>{ state.search = searchInput.value; render(); refocus(searchInput); });
+    }
+    const filterCat = document.getElementById('filter-cat');
+    if(filterCat) filterCat.addEventListener('change', ()=>{ state.filterCat = filterCat.value; render(); });
+    const filterStatus = document.getElementById('filter-status');
+    if(filterStatus) filterStatus.addEventListener('change', ()=>{ state.filterStatus = filterStatus.value; render(); });
+
+    app.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.addEventListener('click', ()=> deleteItem(btn.dataset.del));
+    });
+    app.querySelectorAll('[data-edit]').forEach(btn=>{
+      btn.addEventListener('click', ()=> openEditItem(btn.dataset.edit));
+    });
+    app.querySelectorAll('[data-toggle]').forEach(btn=>{
+      btn.addEventListener('click', ()=> toggleStatus(btn.dataset.toggle));
+    });
+    app.querySelectorAll('[data-fault]').forEach(btn=>{
+      btn.addEventListener('click', ()=> openFaultModal(btn.dataset.fault));
+    });
+    app.querySelectorAll('[data-reactivate]').forEach(btn=>{
+      btn.addEventListener('click', ()=> reactivateItem(btn.dataset.reactivate));
+    });
+    const faultCancel = document.getElementById('fault-cancel');
+    if(faultCancel) faultCancel.addEventListener('click', closeFaultModal);
+    const faultSave = document.getElementById('fault-save');
+    if(faultSave){
+      faultSave.addEventListener('click', ()=>{
+        confirmFault(
+          document.getElementById('fault-reason').value,
+          document.getElementById('fault-note').value
+        );
+      });
+    }
+
+    // ---- Selector de fotos (compartido entre modal de fault y de evidencia) ----
+    const photoFileInput = document.getElementById('photo-file-input');
+    if(photoFileInput){
+      photoFileInput.addEventListener('change', ()=>{
+        if(photoFileInput.files && photoFileInput.files.length){
+          handlePhotoFilesSelected(photoFileInput.files);
+        }
+      });
+    }
+    app.querySelectorAll('[data-remove-pending]').forEach(btn=>{
+      btn.addEventListener('click', ()=> removePendingPhoto(parseInt(btn.dataset.removePending,10)));
+    });
+
+    // ---- Botones de fotos en la tabla ----
+    app.querySelectorAll('[data-gallery]').forEach(btn=>{
+      btn.addEventListener('click', ()=> openGallery(btn.dataset.gallery));
+    });
+    app.querySelectorAll('[data-addphoto]').forEach(btn=>{
+      btn.addEventListener('click', ()=> openPhotoModal(btn.dataset.addphoto));
+    });
+
+    // ---- Modal de agregar foto de evidencia ----
+    const photoCancel = document.getElementById('photo-cancel');
+    if(photoCancel) photoCancel.addEventListener('click', closePhotoModal);
+    const photoSave = document.getElementById('photo-save');
+    if(photoSave){
+      photoSave.addEventListener('click', ()=>{
+        confirmPhotos(document.getElementById('photo-label').value);
+      });
+    }
+
+    // ---- Modal de galería ----
+    const galleryClose = document.getElementById('gallery-close-btn');
+    if(galleryClose) galleryClose.addEventListener('click', closeGallery);
+    app.querySelectorAll('[data-fullphoto]').forEach(img=>{
+      img.addEventListener('click', ()=>{
+        const item = findItem(img.dataset.fullcode);
+        const idx = parseInt(img.dataset.fullphoto,10);
+        if(item && item.photos && item.photos[idx]){
+          window.open(item.photos[idx].data, '_blank');
+        }
+      });
+    });
+    app.querySelectorAll('[data-delphoto]').forEach(btn=>{
+      btn.addEventListener('click', ()=> deletePhoto(btn.dataset.delphotocode, parseInt(btn.dataset.delphoto,10)));
+    });
+
+    // ---- Calendario ----
+    const calPrev = document.getElementById('cal-prev');
+    if(calPrev) calPrev.addEventListener('click', ()=> changeMonth(-1));
+    const calNext = document.getElementById('cal-next');
+    if(calNext) calNext.addEventListener('click', ()=> changeMonth(1));
+    app.querySelectorAll('[data-day]').forEach(cell=>{
+      cell.addEventListener('click', ()=>{
+        state.calSelected = (state.calSelected === cell.dataset.day) ? null : cell.dataset.day;
+        state.eventDraftOpen = false;
+        render();
+      });
+    });
+    const addEventBtn = document.getElementById('add-event-btn');
+    if(addEventBtn) addEventBtn.addEventListener('click', ()=>{ state.eventDraftOpen = true; render(); });
+    const eventCancel = document.getElementById('event-cancel');
+    if(eventCancel) eventCancel.addEventListener('click', ()=>{ state.eventDraftOpen = false; render(); });
+    const eventSave = document.getElementById('event-save');
+    if(eventSave){
+      eventSave.addEventListener('click', ()=>{
+        addCalendarEvent({
+          title: document.getElementById('event-title').value,
+          time: document.getElementById('event-time').value,
+          notes: document.getElementById('event-notes').value
+        });
+      });
+    }
+    app.querySelectorAll('[data-delevent]').forEach(btn=>{
+      btn.addEventListener('click', ()=> deleteCalendarEvent(btn.dataset.delevent));
+    });
+    app.querySelectorAll('[data-assign-equipment]').forEach(btn=>{
+      btn.addEventListener('click', ()=> openEquipmentModal(btn.dataset.assignEquipment));
+    });
+    const equipmentSearch = document.getElementById('equipment-modal-search');
+    if(equipmentSearch){
+      equipmentSearch.addEventListener('input', ()=>{
+        state.equipmentModalSearch = equipmentSearch.value;
+        render();
+        refocus(equipmentSearch);
+      });
+    }
+    app.querySelectorAll('[data-equip-code]').forEach(cb=>{
+      cb.addEventListener('change', ()=> toggleEquipmentSelection(cb.dataset.equipCode));
+    });
+    const equipmentCancel = document.getElementById('equipment-cancel');
+    if(equipmentCancel) equipmentCancel.addEventListener('click', closeEquipmentModal);
+    const equipmentSave = document.getElementById('equipment-save');
+    if(equipmentSave) equipmentSave.addEventListener('click', confirmEquipmentSelection);
+
+    const editCancel = document.getElementById('edit-cancel');
+    if(editCancel) editCancel.addEventListener('click', closeEdit);
+    const editSave = document.getElementById('edit-save');
+    if(editSave){
+      editSave.addEventListener('click', ()=>{
+        saveEditItem({
+          name: document.getElementById('edit-name').value,
+          category: document.getElementById('edit-category').value,
+          responsable: document.getElementById('edit-responsable').value,
+          notes: document.getElementById('edit-notes').value
+        });
+      });
+    }
+
+    const scanInput = document.getElementById('scan-input');
+    if(scanInput){
+      scanInput.focus();
+      scanInput.addEventListener('keydown', e=>{
+        if(e.key === 'Enter'){
+          e.preventDefault();
+          const val = scanInput.value;
+          scanInput.value = '';
+          handleScan(val);
+        }
+      });
+    }
+    const camBtn = document.getElementById('open-camera-btn');
+    if(camBtn) camBtn.addEventListener('click', openCamera);
+    const camClose = document.getElementById('cam-close-btn');
+    if(camClose) camClose.addEventListener('click', closeCamera);
+    const continuousCb = document.getElementById('continuous-checkbox');
+    if(continuousCb){
+      continuousCb.addEventListener('change', ()=>{ state.cameraContinuous = continuousCb.checked; });
+    }
+    const genCodeBtn = document.getElementById('gen-code-btn');
+    if(genCodeBtn) genCodeBtn.addEventListener('click', generateNewCode);
+
+    const altaCategorySelect = document.getElementById('alta-category');
+    if(altaCategorySelect){
+      altaCategorySelect.addEventListener('change', ()=>{
+        const wrap = document.getElementById('alta-category-other-wrap');
+        if(wrap) wrap.style.display = altaCategorySelect.value === 'Otro' ? 'block' : 'none';
+      });
+    }
+
+    const altaCancel = document.getElementById('alta-cancel');
+    if(altaCancel) altaCancel.addEventListener('click', ()=>{ state.altaDraft = null; render(); });
+    const altaSave = document.getElementById('alta-save');
+    if(altaSave){
+      altaSave.addEventListener('click', ()=>{
+        let category = document.getElementById('alta-category').value;
+        if(category === 'Otro'){
+          const otherVal = document.getElementById('alta-category-other').value.trim();
+          if(!otherVal){ alert('Escribe el nombre de la nueva categoría.'); return; }
+          category = otherVal;
+          if(!state.config.categories.includes(category)){
+            state.config.categories.push(category);
+            saveConfig();
+          }
+        }
+        const draft = {
+          code: document.getElementById('alta-code').value,
+          name: document.getElementById('alta-name').value,
+          category: category,
+          notes: document.getElementById('alta-notes').value,
+          responsable: document.getElementById('alta-responsable').value
+        };
+        if(!draft.name.trim()){
+          alert('Ponle un nombre al equipo.');
+          return;
+        }
+        confirmAlta(draft);
+      });
+    }
+    const qrPreview = document.getElementById('alta-qr-preview');
+    if(qrPreview && state.altaDraft){
+      qrPreview.innerHTML = '';
+      const box = document.createElement('div');
+      box.style.background='#fff'; box.style.display='inline-block'; box.style.padding='8px'; box.style.borderRadius='4px';
+      qrPreview.appendChild(box);
+      new QRCode(box, {text: state.altaDraft.code, width:120, height:120});
+    }
+
+    if(state.tab==='etiquetas'){
+      state.items.forEach(it=>{
+        const box = document.getElementById('qr-'+cssSafe(it.code));
+        if(box && !box.dataset.rendered){
+          box.dataset.rendered = '1';
+          new QRCode(box, {text: it.code, width:100, height:100});
+        }
+      });
+      app.querySelectorAll('[data-print-code]').forEach(cb=>{
+        cb.addEventListener('change', ()=>{
+          state.printSelection[cb.dataset.printCode] = cb.checked;
+        });
+      });
+      const printBtn = document.getElementById('print-selected-btn');
+      if(printBtn){
+        printBtn.addEventListener('click', ()=>{
+          const selected = state.items.filter(it=>state.printSelection[it.code]);
+          if(selected.length===0){ alert('Selecciona al menos un equipo para imprimir.'); return; }
+          const printGrid = document.getElementById('print-grid');
+          printGrid.innerHTML='';
+          selected.forEach(it=>{
+            const card = document.createElement('div');
+            card.className='label-card';
+            const qrBox = document.createElement('div');
+            qrBox.className='qr-box';
+            card.appendChild(qrBox);
+            const nameDiv = document.createElement('div');
+            nameDiv.textContent = it.name;
+            card.appendChild(nameDiv);
+            const codeDiv = document.createElement('div');
+            codeDiv.className='code';
+            codeDiv.textContent = it.code;
+            card.appendChild(codeDiv);
+            printGrid.appendChild(card);
+            new QRCode(qrBox, {text: it.code, width:110, height:110});
+          });
+          document.getElementById('print-area').classList.add('show');
+          setTimeout(()=>{
+            window.print();
+            document.getElementById('print-area').classList.remove('show');
+          }, 150);
+        });
+      }
+    }
+
+    const addCatForm = document.getElementById('add-cat-form');
+    if(addCatForm){
+      addCatForm.addEventListener('submit', e=>{
+        e.preventDefault();
+        const val = new FormData(addCatForm).get('newcat').trim();
+        if(val && !state.config.categories.includes(val)){
+          state.config.categories.push(val);
+          saveConfig();
+          render();
+        }
+      });
+    }
+
+    const importFileInput = document.getElementById('import-file-input');
+    if(importFileInput){
+      importFileInput.addEventListener('change', ()=>{
+        if(importFileInput.files && importFileInput.files[0]){
+          handleImportFile(importFileInput.files[0]);
+        }
+      });
+    }
+    const importCancel = document.getElementById('import-cancel');
+    if(importCancel) importCancel.addEventListener('click', cancelImport);
+    const importConfirm = document.getElementById('import-confirm');
+    if(importConfirm) importConfirm.addEventListener('click', confirmImport);
+    const clearItemsBtn = document.getElementById('clear-items-btn');
+    if(clearItemsBtn) clearItemsBtn.addEventListener('click', clearAllItems);
+
+    const saveFirebaseBtn = document.getElementById('save-firebase-btn');
+    if(saveFirebaseBtn){
+      saveFirebaseBtn.addEventListener('click', async ()=>{
+        const val = document.getElementById('firebase-url-input').value.trim();
+        if(!val){ alert('Pega primero la URL de tu base de datos.'); return; }
+        saveFirebaseBtn.textContent = 'Sincronizando...';
+        saveFirebaseBtn.disabled = true;
+        await connectFirebase(val);
+      });
+    }
+    const disconnectBtn = document.getElementById('disconnect-firebase-btn');
+    if(disconnectBtn){
+      disconnectBtn.addEventListener('click', async ()=>{
+        if(confirm('¿Desconectar? La app volverá a guardar los datos solo localmente y el bot dejará de ver información nueva.')){
+          await disconnectFirebase();
+        }
+      });
+    }
+
+    const logoFileInput = document.getElementById('logo-file-input');
+    if(logoFileInput){
+      logoFileInput.addEventListener('change', ()=>{
+        if(logoFileInput.files && logoFileInput.files[0]){
+          handleLogoFileSelected(logoFileInput.files[0]);
+        }
+      });
+    }
+    const removeLogoBtn = document.getElementById('remove-logo-btn');
+    if(removeLogoBtn) removeLogoBtn.addEventListener('click', removeLogo);
+    const saveBrandColorsBtn = document.getElementById('save-brand-colors-btn');
+    if(saveBrandColorsBtn){
+      saveBrandColorsBtn.addEventListener('click', ()=>{
+        saveBrandColors(
+          document.getElementById('brand-accent').value,
+          document.getElementById('brand-header').value,
+          document.getElementById('brand-bg').value
+        );
+      });
+    }
+    const resetBrandColorsBtn = document.getElementById('reset-brand-colors-btn');
+    if(resetBrandColorsBtn) resetBrandColorsBtn.addEventListener('click', resetBrandColors);
+
+    const exportExcelBtn = document.getElementById('export-excel-btn');
+    if(exportExcelBtn) exportExcelBtn.addEventListener('click', exportToExcel);
+    const exportJsonBtn = document.getElementById('export-json-btn');
+    if(exportJsonBtn) exportJsonBtn.addEventListener('click', exportFullBackup);
+  }
+
+  function refocus(el){
+    if(el){ const pos = el.value.length; el.focus(); el.setSelectionRange(pos,pos); }
+  }
+
+  loadAll();
+})();
+</script>
+</body>
+</html>
