@@ -1097,35 +1097,78 @@
   let lastContinuousCode = null;
   let lastContinuousTime = 0;
 
+  function cameraErrorMessage(e){
+    const name = (e && e.name) ? e.name : 'Error';
+    let detail;
+    if(name === 'NotAllowedError' || name === 'PermissionDeniedError'){
+      detail = 'El permiso de cámara está bloqueado para esta página. En iPhone: Ajustes → Safari → Cámara → "Preguntar" o "Permitir", y vuelve a abrir la app.';
+    }else if(name === 'NotFoundError' || name === 'DevicesNotFoundError'){
+      detail = 'No se encontró ninguna cámara en este dispositivo.';
+    }else if(name === 'NotReadableError' || name === 'TrackStartError'){
+      detail = 'La cámara está siendo usada por otra app. Ciérrala e intenta de nuevo.';
+    }else if(name === 'SecurityError'){
+      detail = 'El navegador bloqueó la cámara porque la página no se abrió por una conexión segura (https).';
+    }else if(e && e.message === 'NoMediaDevices'){
+      detail = 'Este navegador no permite usar la cámara desde esta página.';
+    }else{
+      detail = 'Detalle técnico: ' + name + (e && e.message ? ' — ' + e.message : '');
+    }
+    return 'No se pudo abrir la cámara en vivo. ' + detail + ' Mientras tanto puedes usar el botón "Tomar foto del código".';
+  }
+
   async function openCamera(){
     state.cameraOpen = true;
     lastContinuousCode = null;
     lastContinuousTime = 0;
+    // Quita el foco de cualquier campo de texto para que no se abra el teclado encima de la cámara
+    if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
     render();
     try{
-      cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        throw new Error('NoMediaDevices');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+      if(!state.cameraOpen){
+        // Se cerró el modal mientras se esperaba el permiso
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      cameraStream = stream;
       const video = document.getElementById('cam-video');
+      if(!video) throw new Error('No se encontró el video en pantalla');
+      video.muted = true;
+      video.setAttribute('playsinline','');
+      video.setAttribute('webkit-playsinline','');
       video.srcObject = cameraStream;
-      await video.play();
+      // No esperamos a que play() termine: en iPhone a veces tarda o se rechaza aunque el video sí corra
+      const p = video.play();
+      if(p && p.catch) p.catch(err => console.warn('video.play() fue rechazado', err));
       scanLoop();
     }catch(e){
-      state.lastScanMsg = {type:'error', text:'No se pudo acceder a la cámara. Verifica los permisos, o usa el lector físico. Si abriste este archivo directo desde tu computadora/celular (sin pasar por Claude), algunos navegadores bloquean la cámara fuera de una página segura (https) — intenta abrirlo desde el chat de Claude.'};
+      console.error('Error de cámara', e);
+      state.lastScanMsg = {type:'error', text: cameraErrorMessage(e)};
       closeCamera();
     }
   }
+  let lastDecodeTime = 0;
   function scanLoop(){
     const video = document.getElementById('cam-video');
     const canvas = document.getElementById('cam-canvas');
     if(!video || !canvas) return;
-    if(video.readyState === video.HAVE_ENOUGH_DATA){
-      const ctx = canvas.getContext('2d');
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
-      const result = jsQR(imageData.data, imageData.width, imageData.height);
+    const now = Date.now();
+    if(video.readyState >= 2 && video.videoWidth > 0 && (now - lastDecodeTime) > 120){
+      lastDecodeTime = now;
+      // Reducimos el cuadro antes de analizarlo: más rápido y fluido en celulares
+      const scale = Math.min(1, 960 / video.videoWidth);
+      const w = Math.round(video.videoWidth * scale);
+      const h = Math.round(video.videoHeight * scale);
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d', {willReadFrequently:true});
+      ctx.drawImage(video, 0, 0, w, h);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const result = jsQR(imageData.data, w, h, {inversionAttempts:'dontInvert'});
       if(result && result.data){
         if(state.cameraContinuous){
-          const now = Date.now();
           if(result.data !== lastContinuousCode || (now - lastContinuousTime) > 2500){
             lastContinuousCode = result.data;
             lastContinuousTime = now;
@@ -1140,6 +1183,45 @@
       }
     }
     cameraRAFId = requestAnimationFrame(scanLoop);
+  }
+
+  // ---------- Respaldo: leer el QR desde una foto tomada con la cámara normal del teléfono ----------
+  function fileToImage(file){
+    return new Promise((resolve, reject)=>{
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = (err)=>{ URL.revokeObjectURL(url); reject(err); };
+      img.src = url;
+    });
+  }
+  async function handleQrPhoto(file){
+    try{
+      const img = await fileToImage(file);
+      let found = null;
+      for(const maxDim of [1600, 1000, 640]){
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d', {willReadFrequently:true});
+        ctx.drawImage(img, 0, 0, w, h);
+        const data = ctx.getImageData(0, 0, w, h);
+        const result = jsQR(data.data, w, h, {inversionAttempts:'attemptBoth'});
+        if(result && result.data){ found = result.data; break; }
+      }
+      if(found){
+        handleScan(found);
+      }else{
+        state.lastScanMsg = {type:'error', text:'No pude leer ningún código QR en esa foto. Intenta de nuevo con el código centrado, bien enfocado y con buena luz.'};
+        render();
+      }
+    }catch(e){
+      console.error('Error leyendo la foto', e);
+      state.lastScanMsg = {type:'error', text:'No se pudo procesar la foto. Intenta de nuevo.'};
+      render();
+    }
   }
   function closeCamera(){
     state.cameraOpen = false;
@@ -1306,11 +1388,16 @@
       <div><span class="scan-led"></span>Listo para escanear</div>
       ${state.scanMode==='auto' ? `<div class="help-note" style="margin-top:6px;">Detecta el estado actual: si está en bodega lo saca a viaje, si está en viaje lo regresa a bodega.</div>` : ''}
       <div class="scan-input-wrap">
-        <input id="scan-input" class="mono" placeholder="Escanea o escribe el código..." autofocus autocomplete="off">
+        <input id="scan-input" class="mono" placeholder="Escanea o escribe el código..." autocomplete="off">
       </div>
       <div style="color:var(--muted); font-size:12px;">Con un lector físico USB/Bluetooth: apunta y dispara, el código se procesa solo, uno tras otro.</div>
       <div class="cam-btn" id="open-camera-btn" title="Escanear con cámara">▣</div>
       <div style="color:var(--muted); font-size:12px;">o usa la cámara del celular (solo lee códigos QR)</div>
+      <div style="margin-top:14px;">
+        <button id="qr-photo-btn" class="btn-secondary">📷 Tomar foto del código</button>
+        <input type="file" id="qr-photo-input" accept="image/*" capture="environment" style="display:none;">
+      </div>
+      <div style="color:var(--muted); font-size:12px; margin-top:6px;">Abre la cámara normal del teléfono y lee el QR de la foto — úsalo si la cámara en vivo no abre.</div>
       ${state.scanMode==='auto' ? `
         <div class="checkbox-row" style="justify-content:center; margin-top:14px;">
           <input type="checkbox" id="continuous-checkbox" ${state.cameraContinuous?'checked':''}>
@@ -1496,8 +1583,9 @@
     <div class="modal-overlay" id="cam-overlay">
       <div class="modal-box">
         <h3 style="font-size:15px; margin-bottom:10px;">${state.cameraContinuous ? 'Escaneo continuo — apunta a cada código' : 'Apunta al código QR'}</h3>
-        <video id="cam-video" playsinline muted></video>
+        <video id="cam-video" autoplay playsinline muted></video>
         <canvas id="cam-canvas" style="display:none;"></canvas>
+        <div class="help-note" style="margin-top:10px;">¿Ves la pantalla negra? Cierra esto y usa el botón "Tomar foto del código".</div>
         ${state.cameraContinuous ? `<div id="cam-scan-log" style="margin-top:12px; max-height:180px; overflow-y:auto; text-align:left;"></div>` : ''}
         <div class="modal-close-row"><button id="cam-close-btn" class="btn-secondary">${state.cameraContinuous ? 'Terminar' : 'Cancelar'}</button></div>
       </div>
@@ -2040,7 +2128,9 @@
 
     const scanInput = document.getElementById('scan-input');
     if(scanInput){
-      scanInput.focus();
+      // Solo enfoca solo en computadoras (para el lector USB); en celulares abriría el teclado encima de la cámara
+      const coarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      if(!coarsePointer && !state.cameraOpen) scanInput.focus();
       scanInput.addEventListener('keydown', e=>{
         if(e.key === 'Enter'){
           e.preventDefault();
@@ -2052,6 +2142,16 @@
     }
     const camBtn = document.getElementById('open-camera-btn');
     if(camBtn) camBtn.addEventListener('click', openCamera);
+    const qrPhotoBtn = document.getElementById('qr-photo-btn');
+    const qrPhotoInput = document.getElementById('qr-photo-input');
+    if(qrPhotoBtn && qrPhotoInput){
+      qrPhotoBtn.addEventListener('click', ()=> qrPhotoInput.click());
+      qrPhotoInput.addEventListener('change', ()=>{
+        if(qrPhotoInput.files && qrPhotoInput.files[0]){
+          handleQrPhoto(qrPhotoInput.files[0]);
+        }
+      });
+    }
     const camClose = document.getElementById('cam-close-btn');
     if(camClose) camClose.addEventListener('click', closeCamera);
     const continuousCb = document.getElementById('continuous-checkbox');
