@@ -213,6 +213,17 @@
   .cal-chip-mid{border-radius:0;}
   .cal-chip-end{border-top-left-radius:0; border-bottom-left-radius:0;}
   .cal-more{font-size:10px; color:var(--muted); margin-top:2px;}
+  .live-dot{width:8px; height:8px; border-radius:50%; display:inline-block; background:var(--muted); opacity:.6;}
+  .live-dot.on{background:var(--bodega); box-shadow:0 0 6px var(--bodega); opacity:1;}
+  #sync-banner{
+    display:none; position:fixed; left:50%; bottom:14px; transform:translateX(-50%); z-index:300;
+    max-width:min(92vw, 560px); padding:10px 16px; border-radius:8px; font-size:13px; font-weight:600; text-align:center;
+    background:var(--panel-alt); color:var(--text); border:1px solid var(--border); box-shadow:0 6px 24px rgba(0,0,0,.35);
+  }
+  #sync-banner.warn{background:#5a4416; color:#ffe2a3; border-color:#a07a22;}
+  #sync-banner.bad{background:#5a1c24; color:#ffc9d0; border-color:#b0404f;}
+  #sync-banner.ok{background:#14503f; color:#bff5e4; border-color:#2fb6a6;}
+  #sync-banner.info{color:var(--muted);}
   .date-row{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
   input[type="date"]{color-scheme:dark; min-width:0; width:100%;}
   @media (max-width:640px){
@@ -323,6 +334,9 @@
     calSelected: null, // 'YYYY-MM-DD'
     eventDraftOpen: false,
     eventEditId: null,
+    adminsUnlocked: false,
+    masterModalOpen: false,
+    masterModalErr: '',
     equipmentModalEventId: null,
     equipmentModalSelected: {},
     equipmentModalSearch: '',
@@ -356,19 +370,6 @@
       return await res.json();
     }catch(e){ console.error('Error leyendo Firebase', e); return null; }
   }
-  async function fbSet(path, data){
-    const base = fbBase();
-    if(!base) return false;
-    try{
-      await fetch(base+'/'+path+'.json', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
-      return true;
-    }catch(e){ console.error('Error guardando en Firebase', e); return false; }
-  }
-  function itemsToObj(){
-    const o = {};
-    state.items.forEach(it => o[it.code] = it);
-    return o;
-  }
 
   async function fetchConfigFromUrl(url){
     if(!url) return null;
@@ -382,26 +383,560 @@
       return await res.json();
     }catch(e){ return null; }
   }
+  async function safeGet(key, shared){
+    try{ return await window.storage.get(key, shared); }
+    catch(e){ return null; }
+  }
+
+  // ---------- Guardado local (solo cuando NO hay Firebase conectado, p. ej. dentro de Claude) ----------
+  async function saveItems(){
+    try{ await window.storage.set('inv-items', JSON.stringify(state.items), true); }
+    catch(e){ console.error('No se pudo guardar items', e); }
+  }
+  async function saveLog(){
+    const trimmed = state.log.slice(0,300);
+    try{ await window.storage.set('inv-log', JSON.stringify(trimmed), true); }
+    catch(e){ console.error('No se pudo guardar historial', e); }
+  }
+  async function saveEvents(){
+    try{ await window.storage.set('inv-events', JSON.stringify(state.events), true); }
+    catch(e){ console.error('No se pudo guardar eventos', e); }
+  }
   async function loadOperationalData(){
-    if(state.config && state.config.firebaseUrl){
-      const [itemsObj, logData, eventsObj] = await Promise.all([fbGet('items'), fbGet('log'), fbGet('events')]);
-      state.items = itemsObj ? Object.values(itemsObj) : [];
-      state.log = logData ? (Array.isArray(logData) ? logData : Object.values(logData)) : [];
-      state.events = eventsObj ? Object.values(eventsObj) : [];
-    }else{
-      try{
-        const [itemsRes, logRes, eventsRes] = await Promise.all([safeGet('inv-items', true), safeGet('inv-log', true), safeGet('inv-events', true)]);
-        state.items = itemsRes ? JSON.parse(itemsRes.value) : [];
-        state.log = logRes ? JSON.parse(logRes.value) : [];
-        state.events = eventsRes ? JSON.parse(eventsRes.value) : [];
-      }catch(e){
-        console.error('Error cargando datos', e);
-        state.items = []; state.log = []; state.events = [];
-      }
+    try{
+      const [itemsRes, logRes, eventsRes] = await Promise.all([safeGet('inv-items', true), safeGet('inv-log', true), safeGet('inv-events', true)]);
+      state.items = itemsRes ? JSON.parse(itemsRes.value) : [];
+      state.log = logRes ? JSON.parse(logRes.value) : [];
+      state.events = eventsRes ? JSON.parse(eventsRes.value) : [];
+    }catch(e){
+      console.error('Error cargando datos', e);
+      state.items = []; state.log = []; state.events = [];
     }
   }
+
+  // ====================== SINCRONIZACIÓN EN TIEMPO REAL ======================
+  // Todos los dispositivos escuchan la base de datos (Firebase) y cada cambio se guarda por registro
+  // (un equipo, un evento, una entrada del historial) y no como lista completa. Así dos personas
+  // trabajando a la vez no se pisan, y los cambios aparecen en todas las pantallas al momento.
+  const HISTORY_MAX = 1000, HISTORY_KEEP = 800;
+  const sync = {
+    tree: {items:{}, log:{}, events:{}, config:null}, // copia local de lo que hay en Firebase
+    es: null, streamOpen: false, streamEverOpened: false,
+    gotInitial: false, onInitial: null,
+    queue: [], sending: false, retryTimer: null, pollTimer: null, reconnectTimer: null,
+    status: 'ok',            // ok | offline | denied
+    lastError: '', errorTimer: null,
+    hadProblem: false, justSaved: false, savedTimer: null,
+    skipped: false, renderPending: false
+  };
+
+  // Firebase no permite . $ # [ ] / en los nombres de registro: se cambian por ~ + código hexadecimal.
+  function fbKey(s){
+    return String(s).replace(/[~.$#\[\]\/\u0000-\u001f\u007f]/g, ch => '~' + ch.charCodeAt(0).toString(16).padStart(2,'0'));
+  }
+  function fbPath(){
+    return '/' + Array.prototype.map.call(arguments, p => encodeURIComponent(p)).join('/');
+  }
+  let logSeq = 0;
+  function genLogId(){
+    logSeq = (logSeq + 1) % 1296;
+    return 'l' + Date.now().toString(36).padStart(9,'0') + logSeq.toString(36).padStart(2,'0') + Math.random().toString(36).slice(2,5);
+  }
+  function cmpLogDesc(a, b){
+    if(a.at !== b.at) return a.at < b.at ? 1 : -1;
+    const ai = a.id || '', bi = b.id || '';
+    return ai === bi ? 0 : (ai < bi ? 1 : -1);
+  }
+  function jsonEq(a, b){ return JSON.stringify(a) === JSON.stringify(b); }
+
+  function normalizeConfig(cfg, prev){
+    if(!cfg.firebaseUrl && prev && prev.firebaseUrl) cfg.firebaseUrl = prev.firebaseUrl;
+    if(!Array.isArray(cfg.admins)) cfg.admins = cfg.admins ? Object.values(cfg.admins) : ((prev && prev.admins) || []);
+    if(!Array.isArray(cfg.categories)) cfg.categories = cfg.categories ? Object.values(cfg.categories) : DEFAULT_CATEGORIES.slice();
+    if(!cfg.branding || typeof cfg.branding !== 'object') cfg.branding = {logo:null, accent:null, headerBg:null, bg:null};
+    return cfg;
+  }
+
+  function ensureTreeShape(){
+    const t = sync.tree;
+    ['items','log','events'].forEach(k => {
+      if(Array.isArray(t[k])) t[k] = Object.assign({}, t[k]);
+      if(!t[k] || typeof t[k] !== 'object') t[k] = {};
+    });
+    if(t.config === undefined || typeof t.config !== 'object') t.config = null;
+  }
+  // Firebase no guarda null, ni listas u objetos vacíos: para comparar se tratan como "no existe".
+  function isEmptyVal(v){
+    if(v === null || v === undefined) return true;
+    return typeof v === 'object' && Object.keys(v).length === 0;
+  }
+  // Aplica un cambio en la copia local y dice si algo cambió. Con dry=true solo calcula, sin modificar.
+  function setAtPath(path, value, dry){
+    const parts = path.split('/').filter(Boolean);
+    if(value === undefined) value = null;
+    if(parts.length === 0){
+      const next = (value && typeof value === 'object') ? value : {};
+      const changedAll = !jsonEq(sync.tree, next);
+      if(dry) return changedAll;
+      sync.tree = next;
+      ensureTreeShape();
+      return changedAll;
+    }
+    let node = sync.tree;
+    for(let i = 0; i < parts.length - 1; i++){
+      const k = parts[i];
+      if(node[k] === null || node[k] === undefined || typeof node[k] !== 'object'){
+        if(dry) return !isEmptyVal(value);
+        node[k] = {};
+      }
+      node = node[k];
+    }
+    const last = parts[parts.length - 1];
+    let changed;
+    if(isEmptyVal(value)){
+      changed = !isEmptyVal(node[last]);
+      if(!dry) delete node[last];
+    }else{
+      changed = !jsonEq(node[last], value);
+      if(!dry) node[last] = value;
+    }
+    if(!dry) ensureTreeShape();
+    return changed;
+  }
+
+  function rebuildFromTree(){
+    const t = sync.tree;
+    state.items = Object.values(t.items).filter(x => x && typeof x === 'object' && x.code);
+    state.events = Object.values(t.events).filter(x => x && typeof x === 'object' && x.id);
+    state.log = Object.values(t.log).filter(x => x && typeof x === 'object' && x.at).sort(cmpLogDesc);
+    if(t.config && typeof t.config === 'object'){
+      const next = normalizeConfig(t.config, state.config);
+      state.config = next;
+      sync.tree.config = next;
+      applyBranding();
+    }
+  }
+
+  // ¿Hay escrituras nuestras pendientes sobre este mismo registro? Si sí, el eco del servidor no se aplica
+  // (nuestra copia local ya es la más nueva); solo si trae algo distinto se marca para reconciliar al terminar de guardar.
+  function pendingTouches(parts){
+    if(!parts.length) return false;
+    const top = '/' + encodeURIComponent(parts[0]);
+    const rec = parts.length > 1 ? top + '/' + encodeURIComponent(parts[1]) : null;
+    return sync.queue.some(op => {
+      if(op.path === top) return true;
+      if(parts[0] === 'config') return op.path.indexOf(top) === 0;
+      if(rec) return op.path === rec || op.path.indexOf(rec + '/') === 0;
+      return op.path.indexOf(top + '/') === 0;
+    });
+  }
+
+  function handleStreamEvent(type, raw){
+    let msg;
+    try{ msg = JSON.parse(raw); }catch(e){ return; }
+    if(!msg) return;
+    const path = msg.path || '/';
+    const base = path.split('/').filter(Boolean);
+    let changed = false;
+    if(type === 'put'){
+      if(base.length && pendingTouches(base)){
+        if(setAtPath(path, msg.data, true)) sync.skipped = true;
+        return;
+      }
+      changed = setAtPath(path, msg.data);
+    }else{
+      Object.keys(msg.data || {}).forEach(k => {
+        const parts = base.concat([k]);
+        const p = '/' + parts.join('/');
+        if(pendingTouches(parts)){
+          if(setAtPath(p, msg.data[k], true)) sync.skipped = true;
+          return;
+        }
+        if(setAtPath(p, msg.data[k])) changed = true;
+      });
+    }
+    if(!sync.gotInitial && type === 'put' && base.length === 0){
+      sync.gotInitial = true;
+      rebuildFromTree();
+      if(sync.onInitial) sync.onInitial();
+      return;
+    }
+    if(changed){
+      rebuildFromTree();
+      scheduleRemoteRender();
+    }
+  }
+
+  function connectStream(){
+    const base = fbBase();
+    if(!base || typeof EventSource === 'undefined') return;
+    if(sync.es){ try{ sync.es.close(); }catch(e){} }
+    const es = new EventSource(base + '/.json');
+    sync.es = es;
+    es.onopen = ()=>{ sync.streamOpen = true; sync.streamEverOpened = true; updateSyncBanner(); updateLiveIndicator(); };
+    es.onerror = ()=>{
+      sync.streamOpen = false;
+      updateSyncBanner(); updateLiveIndicator();
+      if(es.readyState === 2 && !sync.reconnectTimer){
+        sync.reconnectTimer = setTimeout(()=>{ sync.reconnectTimer = null; if(sync.es === es && fbBase()) connectStream(); }, 4000);
+      }
+    };
+    es.addEventListener('put', ev => handleStreamEvent('put', ev.data));
+    es.addEventListener('patch', ev => handleStreamEvent('patch', ev.data));
+    const revoked = ()=>{ sync.status = 'denied'; sync.hadProblem = true; updateSyncBanner(); };
+    es.addEventListener('cancel', revoked);
+    es.addEventListener('auth_revoked', revoked);
+  }
+  async function pollOnce(){
+    const base = fbBase();
+    if(!base) return;
+    try{
+      const res = await fetch(base + '/.json');
+      if(res.status === 401 || res.status === 403){ sync.status = 'denied'; sync.hadProblem = true; updateSyncBanner(); return; }
+      if(!res.ok) return;
+      const data = await res.json();
+      const changed = setAtPath('/', data);
+      const first = !sync.gotInitial;
+      sync.gotInitial = true;
+      if(changed || first){
+        rebuildFromTree();
+        if(!first) scheduleRemoteRender();
+      }
+    }catch(e){ /* sin conexión: se intenta de nuevo luego */ }
+  }
+  function stopSync(){
+    if(sync.es){ try{ sync.es.close(); }catch(e){} sync.es = null; }
+    if(sync.pollTimer){ clearInterval(sync.pollTimer); sync.pollTimer = null; }
+    if(sync.reconnectTimer){ clearTimeout(sync.reconnectTimer); sync.reconnectTimer = null; }
+    sync.streamOpen = false;
+    sync.gotInitial = false;
+  }
+  // Carga todo desde Firebase y se queda escuchando cambios. Devuelve una promesa que se cumple al tener los datos.
+  function startSync(){
+    return new Promise(resolve => {
+      stopSync();
+      let done = false;
+      const finish = ()=>{ if(done) return; done = true; sync.onInitial = null; resolve(); };
+      sync.onInitial = finish;
+      if(typeof EventSource === 'undefined'){
+        pollOnce().then(()=>{ if(!sync.pollTimer) sync.pollTimer = setInterval(pollOnce, 10000); finish(); });
+        return;
+      }
+      connectStream();
+      setTimeout(async ()=>{
+        if(!done){ await pollOnce(); finish(); }
+      }, 8000);
+    });
+  }
+
+  // ---------- Refresco de pantalla cuando llegan cambios de otros dispositivos ----------
+  function userIsBusy(){
+    if(state.cameraOpen || state.altaDraft || state.editingCode || state.faultModalCode || state.photoModalCode ||
+       state.galleryCode || state.eventDraftOpen || state.eventEditId || state.equipmentModalEventId ||
+       state.importPreview || state.masterModalOpen) return true;
+    if(state.tab === 'config' && adminsAreUnlocked()) return true;
+    const ae = document.activeElement;
+    if(ae && ae !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)){
+      return !(ae.id === 'search-input' || ae.id === 'filter-cat' || ae.id === 'filter-status');
+    }
+    return false;
+  }
+  function scheduleRemoteRender(){
+    sync.renderPending = true;
+    tryRemoteRender();
+  }
+  function tryRemoteRender(){
+    if(!sync.renderPending) return;
+    if(state.loading || !state.session){ sync.renderPending = false; return; }
+    if(['resumen','calendario','historial','etiquetas','config'].indexOf(state.tab) === -1){ sync.renderPending = false; return; }
+    if(userIsBusy()) return; // se espera a que termine de escribir o de usar el formulario
+    sync.renderPending = false;
+    const ae = document.activeElement;
+    const keepId = (ae && ae.id === 'search-input') ? ae.id : null;
+    const pos = keepId ? ae.selectionStart : null;
+    render();
+    if(keepId){
+      const el = document.getElementById(keepId);
+      if(el){ el.focus(); try{ el.setSelectionRange(pos, pos); }catch(e){} }
+    }
+  }
+
+  // ---------- Escritura por registro con cola, reintentos y avisos ----------
+  function queueWrite(method, path, body){
+    sync.queue.push({method, path, body});
+    updateSyncBanner();
+    flushQueue();
+  }
+  function scheduleRetry(ms){
+    if(sync.retryTimer) return;
+    sync.retryTimer = setTimeout(()=>{ sync.retryTimer = null; flushQueue(); }, ms);
+  }
+  function flashError(msg){
+    sync.lastError = msg;
+    if(sync.errorTimer) clearTimeout(sync.errorTimer);
+    sync.errorTimer = setTimeout(()=>{ sync.lastError = ''; updateSyncBanner(); }, 9000);
+  }
+  async function flushQueue(){
+    if(sync.sending || !fbBase()) return;
+    sync.sending = true;
+    try{
+      while(sync.queue.length){
+        const op = sync.queue[0];
+        let res;
+        try{
+          res = await fetch(fbBase() + op.path + '.json', {
+            method: op.method,
+            headers: op.body !== undefined ? {'Content-Type':'application/json'} : undefined,
+            body: op.body !== undefined ? JSON.stringify(op.body) : undefined
+          });
+        }catch(e){
+          sync.status = 'offline'; sync.hadProblem = true; scheduleRetry(4000); break;
+        }
+        if(res.ok){
+          sync.queue.shift();
+          if(sync.status !== 'ok') sync.status = 'ok';
+          continue;
+        }
+        if(res.status === 401 || res.status === 403){
+          sync.status = 'denied'; sync.hadProblem = true; scheduleRetry(15000); break;
+        }
+        if(res.status >= 400 && res.status < 500){
+          // Cambio inválido: se descarta para no bloquear los demás
+          sync.queue.shift();
+          sync.hadProblem = true;
+          flashError('No se pudo guardar un cambio (error ' + res.status + ').');
+          continue;
+        }
+        sync.status = 'offline'; sync.hadProblem = true; scheduleRetry(4000); break;
+      }
+      if(!sync.queue.length && sync.status === 'ok'){
+        if(sync.hadProblem){
+          sync.hadProblem = false;
+          sync.justSaved = true;
+          if(sync.savedTimer) clearTimeout(sync.savedTimer);
+          sync.savedTimer = setTimeout(()=>{ sync.justSaved = false; updateSyncBanner(); }, 2500);
+        }
+        if(sync.skipped){ sync.skipped = false; pollOnce(); }
+      }
+    }finally{
+      sync.sending = false;
+      updateSyncBanner();
+    }
+  }
+  async function drainQueue(maxMs){
+    const t0 = Date.now();
+    while(sync.queue.length && Date.now() - t0 < maxMs){
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+  function updateSyncBanner(){
+    let el = document.getElementById('sync-banner');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'sync-banner';
+      document.body.appendChild(el);
+    }
+    // Se cuentan los cambios que ve el usuario (equipo, evento, ajustes), no las líneas del historial
+    const visible = sync.queue.filter(op => op.path.indexOf('/log') !== 0).length;
+    const n = visible || sync.queue.length;
+    let text = '', kind = '';
+    if(sync.status === 'denied'){
+      text = '⛔ Firebase no permite guardar (revisa las reglas de la base de datos). Cambios pendientes: ' + n + '.'; kind = 'bad';
+    }else if(sync.status === 'offline' && sync.queue.length > 0){
+      text = '⚠ Sin conexión: ' + n + (n === 1 ? ' cambio pendiente' : ' cambios pendientes') + '. Se guardan solos al volver la señal. No cierres la app todavía.'; kind = 'warn';
+    }else if(sync.lastError){
+      text = '⚠ ' + sync.lastError; kind = 'warn';
+    }else if(sync.streamEverOpened && !sync.streamOpen && fbBase()){
+      text = 'Reconectando con la base de datos…'; kind = 'info';
+    }else if(sync.justSaved){
+      text = '✓ Cambios guardados'; kind = 'ok';
+    }
+    el.className = kind ? 'sync-banner ' + kind : '';
+    el.textContent = text;
+    el.style.display = text ? 'block' : 'none';
+  }
+  function updateLiveIndicator(){
+    const el = document.getElementById('live-dot');
+    if(el) el.className = 'live-dot ' + (sync.streamOpen ? 'on' : 'off');
+  }
+  function initSyncListeners(){
+    window.addEventListener('online', ()=>{
+      if(sync.retryTimer){ clearTimeout(sync.retryTimer); sync.retryTimer = null; }
+      flushQueue();
+      if(fbBase() && typeof EventSource !== 'undefined' && sync.gotInitial && (!sync.es || sync.es.readyState !== 1)) connectStream();
+    });
+    window.addEventListener('beforeunload', e=>{
+      if(sync.queue.length){ e.preventDefault(); e.returnValue = ''; return ''; }
+    });
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.visibilityState !== 'visible' || !fbBase()) return;
+      if(typeof EventSource !== 'undefined' && sync.gotInitial && (!sync.es || sync.es.readyState !== 1)) connectStream();
+      flushQueue();
+    });
+    setInterval(tryRemoteRender, 700);
+    updateSyncBanner();
+  }
+
+  // ---------- Dibujar códigos QR sin romper la pantalla si la librería no cargó ----------
+  function drawQR(el, text, size){
+    try{
+      if(typeof QRCode === 'undefined') throw new Error('sin librería');
+      new QRCode(el, {text: text, width: size, height: size});
+    }catch(e){
+      el.textContent = text;
+      el.style.fontSize = '11px'; el.style.wordBreak = 'break-all'; el.style.color = '#000';
+    }
+  }
+
+  // ---------- Guardar cambios (por registro en Firebase, o en el almacenamiento local si no hay Firebase) ----------
+  function pickFields(obj, fields){
+    const body = {};
+    fields.forEach(f => { body[f] = (obj[f] === undefined || obj[f] === null) ? null : obj[f]; });
+    return body;
+  }
+  function persistItem(it, fields){
+    if(!fbBase()){ saveItems(); return; }
+    const key = fbKey(it.code);
+    sync.tree.items[key] = it;
+    if(fields) queueWrite('PATCH', fbPath('items', key), pickFields(it, fields));
+    else queueWrite('PUT', fbPath('items', key), it);
+  }
+  function persistItemsBulk(list){
+    if(!fbBase()){ saveItems(); return; }
+    const body = {};
+    list.forEach(it => { const k = fbKey(it.code); sync.tree.items[k] = it; body[k] = it; });
+    queueWrite('PATCH', '/items', body);
+  }
+  function removeItemRemote(code){
+    if(!fbBase()){ saveItems(); return; }
+    const key = fbKey(code);
+    delete sync.tree.items[key];
+    queueWrite('DELETE', fbPath('items', key));
+  }
+  function removeAllItemsRemote(){
+    if(!fbBase()){ saveItems(); return; }
+    sync.tree.items = {};
+    queueWrite('DELETE', '/items');
+  }
+  function persistLogEntry(e){
+    if(!fbBase()){ saveLog(); return; }
+    sync.tree.log[e.id] = e;
+    queueWrite('PUT', fbPath('log', e.id), e);
+    pruneLogIfNeeded();
+  }
+  function persistLogBulk(list){
+    if(!fbBase()){ saveLog(); return; }
+    const body = {};
+    list.forEach(e => { sync.tree.log[e.id] = e; body[e.id] = e; });
+    queueWrite('PATCH', '/log', body);
+    pruneLogIfNeeded();
+  }
+  function pruneLogIfNeeded(){
+    const keys = Object.keys(sync.tree.log);
+    if(keys.length <= HISTORY_MAX) return;
+    const sorted = keys.map(k => ({k, e: sync.tree.log[k]})).filter(x => x.e && x.e.at).sort((a, b) => cmpLogDesc(a.e, b.e));
+    const body = {};
+    sorted.slice(HISTORY_KEEP).forEach(x => { body[x.k] = null; delete sync.tree.log[x.k]; });
+    if(Object.keys(body).length) queueWrite('PATCH', '/log', body);
+  }
+  function persistEvent(ev, fields){
+    if(!fbBase()){ saveEvents(); return; }
+    const key = fbKey(ev.id);
+    sync.tree.events[key] = ev;
+    if(fields) queueWrite('PATCH', fbPath('events', key), pickFields(ev, fields));
+    else queueWrite('PUT', fbPath('events', key), ev);
+  }
+  function removeEventRemote(id){
+    if(!fbBase()){ saveEvents(); return; }
+    const key = fbKey(id);
+    delete sync.tree.events[key];
+    queueWrite('DELETE', fbPath('events', key));
+  }
+  async function saveConfig(fields){
+    try{ await window.storage.set('inv-config', JSON.stringify(state.config), true); }
+    catch(e){ /* fuera de Claude no existe ese almacenamiento: se ignora */ }
+    if(fbBase()){
+      sync.tree.config = state.config;
+      if(fields && fields.length) queueWrite('PATCH', '/config', pickFields(state.config, fields));
+      else queueWrite('PUT', '/config', state.config);
+    }
+  }
+
+  async function connectFirebase(url){
+    const clean = url.trim().replace(/\/$/, '');
+    let remote = null;
+    try{
+      const res = await fetch(clean + '/.json');
+      if(res.status === 401 || res.status === 403){ alert('Firebase rechazó la conexión: revisa las reglas de acceso de la base de datos.'); render(); return; }
+      if(!res.ok){ alert('No se pudo leer esa dirección (error ' + res.status + '). Revisa que esté bien escrita.'); render(); return; }
+      remote = await res.json();
+    }catch(e){
+      alert('No se pudo conectar. Revisa la dirección y tu conexión a internet.'); render(); return;
+    }
+    stopSync();
+    state.config.firebaseUrl = clean;
+    const remoteHasData = !!(remote && typeof remote === 'object' && ['items','events','log'].some(k => remote[k] && Object.keys(remote[k]).length));
+    if(!remoteHasData){
+      // Base nueva y vacía: se sube lo que haya guardado localmente
+      state.log.forEach(e => { if(!e.id) e.id = genLogId(); });
+      sync.tree = {items:{}, log:{}, events:{}, config:null};
+      persistItemsBulk(state.items);
+      persistLogBulk(state.log);
+      state.events.forEach(ev => persistEvent(ev));
+      await drainQueue(15000);
+    }
+    await saveConfig();
+    await startSync();
+    render();
+  }
+  async function disconnectFirebase(){
+    stopSync();
+    state.config.firebaseUrl = '';
+    await saveConfig();
+    render();
+  }
+
+  async function handleLogoFileSelected(file){
+    try{
+      const dataUrl = await compressLogoFile(file, 240);
+      state.config.branding.logo = dataUrl;
+      await saveConfig(['branding']);
+      applyBranding();
+      render();
+    }catch(e){ console.error('Error procesando el logo', e); alert('No se pudo procesar la imagen.'); }
+  }
+  async function removeLogo(){
+    if(!confirm('¿Quitar el logo actual y usar el ícono genérico?')) return;
+    state.config.branding.logo = null;
+    await saveConfig(['branding']);
+    applyBranding();
+    render();
+  }
+  async function saveBrandColors(accent, headerBg, bg){
+    state.config.branding.accent = accent || null;
+    state.config.branding.headerBg = headerBg || null;
+    state.config.branding.bg = bg || null;
+    await saveConfig(['branding']);
+    applyBranding();
+    render();
+  }
+  async function resetBrandColors(){
+    state.config.branding.accent = null;
+    state.config.branding.headerBg = null;
+    state.config.branding.bg = null;
+    await saveConfig(['branding']);
+    applyBranding();
+    render();
+  }
+
+  function addLog(entry){
+    const e = Object.assign({id: genLogId(), at: nowIso()}, entry);
+    state.log.unshift(e);
+    persistLogEntry(e);
+  }
+
   async function loadAll(){
-    // 1. Intenta cargar la configuración desde Firebase (funciona en cualquier navegador, dentro o fuera de Claude)
+    // 1. Configuración desde Firebase (funciona en cualquier navegador, dentro o fuera de Claude)
     state.config = await fetchConfigFromUrl(DEFAULT_FIREBASE_URL);
     if(state.firebaseDenied){
       state.loading = false;
@@ -417,110 +952,33 @@
       }catch(e){ state.config = null; }
     }
 
+    let needsSave = false;
+    const legacyNoBranding = !!(state.config && state.config.branding === undefined && !state.config.brandingInit);
     if(state.config && !state.config.firebaseUrl && DEFAULT_FIREBASE_URL){
       state.config.firebaseUrl = DEFAULT_FIREBASE_URL;
-      saveConfig();
+      needsSave = true;
     }
-    if(state.config && state.config.branding === undefined){
-      // Instalación existente sin branding propio: conserva el logo que ya tenía puesto.
-      state.config.branding = { logo: DEFAULT_LOGO_DATA_URI, accent:null, headerBg:null, bg:null };
-      saveConfig();
+
+    // 3. Datos: en vivo desde Firebase (se queda escuchando cambios), o locales si no hay Firebase
+    if(state.config && state.config.firebaseUrl){
+      await startSync();
+      if(!sync.tree.config) needsSave = true; // Firebase aún no tenía la configuración: se sube
+    }else{
+      await loadOperationalData();
+    }
+
+    if(state.config){
+      if(legacyNoBranding){
+        // Instalación existente sin branding propio: conserva el logo que ya tenía puesto.
+        state.config.branding = { logo: DEFAULT_LOGO_DATA_URI, accent:null, headerBg:null, bg:null };
+        needsSave = true;
+      }
+      normalizeConfig(state.config, null);
+      if(needsSave) saveConfig();
     }
     applyBranding();
-
-    // Asegura que la configuración quede también en Firebase, para que cualquier navegador la vea de ahí en adelante
-    if(state.config && state.config.firebaseUrl){
-      fbSet('config', state.config);
-    }
-
-    await loadOperationalData();
     state.loading = false;
     render();
-  }
-  async function safeGet(key, shared){
-    try{ return await window.storage.get(key, shared); }
-    catch(e){ return null; }
-  }
-  async function saveItems(){
-    if(fbBase()){ await fbSet('items', itemsToObj()); return; }
-    try{ await window.storage.set('inv-items', JSON.stringify(state.items), true); }
-    catch(e){ console.error('No se pudo guardar items', e); }
-  }
-  async function saveLog(){
-    const trimmed = state.log.slice(0,300);
-    if(fbBase()){ await fbSet('log', trimmed); return; }
-    try{ await window.storage.set('inv-log', JSON.stringify(trimmed), true); }
-    catch(e){ console.error('No se pudo guardar historial', e); }
-  }
-  function eventsToObj(){
-    const o = {};
-    state.events.forEach(ev => o[ev.id] = ev);
-    return o;
-  }
-  async function saveEvents(){
-    if(fbBase()){ await fbSet('events', eventsToObj()); return; }
-    try{ await window.storage.set('inv-events', JSON.stringify(state.events), true); }
-    catch(e){ console.error('No se pudo guardar eventos', e); }
-  }
-  async function saveConfig(){
-    try{ await window.storage.set('inv-config', JSON.stringify(state.config), true); }
-    catch(e){ console.error('No se pudo guardar configuración localmente', e); }
-    if(fbBase()){
-      try{ await fbSet('config', state.config); }
-      catch(e){ console.error('No se pudo guardar configuración en Firebase', e); }
-    }
-  }
-  async function connectFirebase(url){
-    state.config.firebaseUrl = url.trim();
-    await saveConfig();
-    // Sube lo que ya tengas localmente para no perder nada
-    await fbSet('items', itemsToObj());
-    await fbSet('log', state.log);
-    await fbSet('events', eventsToObj());
-    render();
-  }
-  async function disconnectFirebase(){
-    state.config.firebaseUrl = '';
-    await saveConfig();
-    render();
-  }
-
-  async function handleLogoFileSelected(file){
-    try{
-      const dataUrl = await compressLogoFile(file, 240);
-      state.config.branding.logo = dataUrl;
-      await saveConfig();
-      applyBranding();
-      render();
-    }catch(e){ console.error('Error procesando el logo', e); alert('No se pudo procesar la imagen.'); }
-  }
-  async function removeLogo(){
-    if(!confirm('¿Quitar el logo actual y usar el ícono genérico?')) return;
-    state.config.branding.logo = null;
-    await saveConfig();
-    applyBranding();
-    render();
-  }
-  async function saveBrandColors(accent, headerBg, bg){
-    state.config.branding.accent = accent || null;
-    state.config.branding.headerBg = headerBg || null;
-    state.config.branding.bg = bg || null;
-    await saveConfig();
-    applyBranding();
-    render();
-  }
-  async function resetBrandColors(){
-    state.config.branding.accent = null;
-    state.config.branding.headerBg = null;
-    state.config.branding.bg = null;
-    await saveConfig();
-    applyBranding();
-    render();
-  }
-
-  function addLog(entry){
-    state.log.unshift(Object.assign({at: nowIso()}, entry));
-    saveLog();
   }
 
   function findItem(code){
@@ -530,7 +988,7 @@
   // ---------------- ACTIONS ----------------
   function doLogin(pin){
     if(pin === MASTER_PIN){
-      state.session = {role:'admin', name:'Soporte'};
+      state.session = {role:'admin', name:'Soporte', master:true};
       state.loginErr='';
       state.tab = 'resumen';
       render();
@@ -553,14 +1011,59 @@
   }
   function doLogout(){
     state.session = null;
+    state.adminsUnlocked = false;
+    state.masterModalOpen = false;
+    state.masterModalErr = '';
     render();
   }
+
+  // ---------- Administración de PINs (protegida con la clave maestra) ----------
+  function adminsAreUnlocked(){
+    return !!(state.adminsUnlocked || (state.session && state.session.master));
+  }
+  function openMasterModal(){
+    state.masterModalOpen = true;
+    state.masterModalErr = '';
+    render();
+  }
+  function closeMasterModal(){
+    state.masterModalOpen = false;
+    state.masterModalErr = '';
+    render();
+  }
+  function tryUnlockAdmins(key){
+    if(key === MASTER_PIN){
+      state.adminsUnlocked = true;
+      state.masterModalOpen = false;
+      state.masterModalErr = '';
+    }else{
+      state.masterModalErr = 'Clave incorrecta. Intenta de nuevo.';
+    }
+    render();
+  }
+  function lockAdmins(){
+    state.adminsUnlocked = false;
+    render();
+  }
+  function saveAdminChanges(list){
+    const cleaned = list.map(a => ({ name: (a.name||'').trim(), pin: (a.pin||'').trim() }));
+    if(cleaned.some(a => !a.name)){ alert('Cada administrador necesita un nombre.'); return; }
+    if(cleaned.some(a => a.pin.length < 4)){ alert('Cada PIN debe tener al menos 4 caracteres.'); return; }
+    if(cleaned.some(a => a.pin === MASTER_PIN)){ alert('Ese PIN no está disponible. Elige otro.'); return; }
+    if(new Set(cleaned.map(a => a.pin)).size !== cleaned.length){ alert('Los PINs deben ser diferentes entre sí.'); return; }
+    state.config.admins = cleaned;
+    saveConfig(['admins']);
+    state.adminsUnlocked = false;
+    render();
+    alert('Listo, se actualizaron los administradores.' + (fbBase() ? ' Los demás dispositivos lo reciben al momento.' : ''));
+  }
   async function doSetup(admins){
-    state.config = {admins: admins, categories: DEFAULT_CATEGORIES.slice(), firebaseUrl: DEFAULT_FIREBASE_URL, branding: {logo:null, accent:null, headerBg:null, bg:null}};
+    state.config = {admins: admins, categories: DEFAULT_CATEGORIES.slice(), firebaseUrl: DEFAULT_FIREBASE_URL, brandingInit: true, branding: {logo:null, accent:null, headerBg:null, bg:null}};
     state.loading = true;
     render();
     await saveConfig();
-    await loadOperationalData(); // trae el equipo/historial/calendario que ya existieran en Firebase
+    // trae (y se queda escuchando) el equipo/historial/calendario que ya existieran en Firebase
+    if(fbBase()) await startSync(); else await loadOperationalData();
     state.loading = false;
     render();
   }
@@ -593,7 +1096,7 @@
     const newStatus = item.status === 'bodega' ? 'viaje' : 'bodega';
     item.status = newStatus;
     item.updatedAt = nowIso();
-    saveItems();
+    persistItem(item, ['status','updatedAt']);
     addLog({code:item.code, name:item.name, action: newStatus==='viaje' ? 'salida' : 'regreso', by: state.session.name});
     const text = newStatus==='viaje'
       ? '"'+item.name+'" salió de bodega — ahora en viaje.'
@@ -632,7 +1135,7 @@
       addedAt: nowIso(), updatedAt: nowIso()
     };
     state.items.push(newItem);
-    saveItems();
+    persistItem(newItem);
     addLog({code:newItem.code, name:newItem.name, action:'alta', by: state.session.name});
     state.lastScanMsg = {type:'ok', text:'"'+newItem.name+'" registrado en bodega.'};
     state.altaDraft = null;
@@ -648,7 +1151,7 @@
   function deleteItem(code){
     if(!confirm('¿Eliminar este equipo del inventario? Esta acción no se puede deshacer.')) return;
     state.items = state.items.filter(it => it.code !== code);
-    saveItems();
+    removeItemRemote(code);
     render();
   }
 
@@ -669,7 +1172,7 @@
     item.notes = fields.notes||'';
     item.responsable = fields.responsable||'';
     item.updatedAt = nowIso();
-    saveItems();
+    persistItem(item, ['name','category','notes','responsable','updatedAt']);
     state.editingCode = null;
     render();
   }
@@ -680,7 +1183,7 @@
     const newStatus = item.status === 'bodega' ? 'viaje' : 'bodega';
     item.status = newStatus;
     item.updatedAt = nowIso();
-    saveItems();
+    persistItem(item, ['status','updatedAt']);
     addLog({code:item.code, name:item.name, action: newStatus==='viaje' ? 'salida' : 'regreso', by: state.session.name});
     render();
   }
@@ -707,7 +1210,7 @@
       item.photos.push({data:p, label:'Fuera de servicio: '+reason, at: nowIso(), by: state.session.name});
     });
     item.photos = item.photos.slice(-12); // limita el tamaño total por equipo
-    saveItems();
+    persistItem(item, ['status','faultReason','faultNote','updatedAt','photos']);
     addLog({code:item.code, name:item.name, action:'fuera_servicio', by: state.session.name, detail: reason});
     state.faultModalCode = null;
     state.pendingPhotos = [];
@@ -721,7 +1224,7 @@
     item.faultReason = null;
     item.faultNote = '';
     item.updatedAt = nowIso();
-    saveItems();
+    persistItem(item, ['status','faultReason','faultNote','updatedAt']);
     addLog({code:item.code, name:item.name, action:'reactivado', by: state.session.name});
     render();
   }
@@ -804,7 +1307,7 @@
     });
     item.photos = item.photos.slice(-12);
     item.updatedAt = nowIso();
-    saveItems();
+    persistItem(item, ['photos','updatedAt']);
     addLog({code:item.code, name:item.name, action:'foto', by: state.session.name, detail: label || statusLabel(item.status)});
     state.photoModalCode = null;
     state.pendingPhotos = [];
@@ -823,7 +1326,7 @@
     if(!item || !item.photos) return;
     if(!confirm('¿Eliminar esta foto?')) return;
     item.photos.splice(index, 1);
-    saveItems();
+    persistItem(item, ['photos']);
     render();
   }
 
@@ -875,7 +1378,7 @@
       time: fields.time||'', notes: fields.notes||'', by: state.session.name, createdAt: nowIso()
     };
     state.events.push(ev);
-    saveEvents();
+    persistEvent(ev);
     state.eventDraftOpen = false;
     state.calSelected = v.start;
     showMonthOf(v.start);
@@ -889,7 +1392,7 @@
     if(!v) return;
     ev.title = v.title; ev.date = v.start; ev.endDate = v.end;
     ev.time = fields.time||''; ev.notes = fields.notes||'';
-    saveEvents();
+    persistEvent(ev, ['title','date','endDate','time','notes']);
     state.eventEditId = null;
     if(!state.calSelected || !(v.start <= state.calSelected && state.calSelected <= v.end)){
       state.calSelected = v.start;
@@ -902,7 +1405,7 @@
     const multi = ev && eventEnd(ev) !== ev.date;
     if(!confirm(multi ? '¿Eliminar este evento? Se quitará de todos sus días (' + fmtDateEs(ev.date) + ' al ' + fmtDateEs(eventEnd(ev)) + ').' : '¿Eliminar este evento?')) return;
     state.events = state.events.filter(e=>e.id!==id);
-    saveEvents();
+    removeEventRemote(id);
     render();
   }
   function changeMonth(delta){
@@ -940,7 +1443,7 @@
     const ev = state.events.find(e=>e.id===state.equipmentModalEventId);
     if(!ev) return;
     ev.equipmentCodes = Object.keys(state.equipmentModalSelected).filter(code=>state.equipmentModalSelected[code]);
-    saveEvents();
+    persistEvent(ev, ['equipmentCodes']);
     state.equipmentModalEventId = null;
     state.equipmentModalSelected = {};
     render();
@@ -1048,6 +1551,7 @@
     if(!state.importPreview || state.importPreview.length===0) return;
     const existingCodes = new Set(state.items.map(it=>it.code));
     let addedCategory = false;
+    const importedItems = [], importedLogs = [];
     state.importPreview.forEach(row=>{
       let code = row.code && row.code.trim() ? row.code.trim() : genId();
       while(existingCodes.has(code)){ code = genId(); }
@@ -1063,12 +1567,15 @@
         addedAt: nowIso(), updatedAt: nowIso()
       };
       state.items.push(newItem);
-      state.log.unshift({code, name:newItem.name, action:'alta', by: state.session.name, at: nowIso()});
+      importedItems.push(newItem);
+      const logEntry = {id: genLogId(), code, name:newItem.name, action:'alta', by: state.session.name, at: nowIso()};
+      state.log.unshift(logEntry);
+      importedLogs.push(logEntry);
     });
     const count = state.importPreview.length;
-    saveItems();
-    saveLog();
-    if(addedCategory) saveConfig();
+    persistItemsBulk(importedItems);
+    persistLogBulk(importedLogs);
+    if(addedCategory) saveConfig(['categories']);
     state.importPreview = null;
     render();
     alert(count + ' equipo(s) importado(s) correctamente. Ve a la pestaña Etiquetas para generar e imprimir sus códigos QR.');
@@ -1082,7 +1589,7 @@
     if(typed !== 'ELIMINAR'){ alert('Cancelado — no se eliminó nada.'); return; }
     const count = state.items.length;
     state.items = [];
-    saveItems();
+    removeAllItemsRemote();
     addLog({code:'—', name:'Todo el equipo ('+count+')', action:'vaciado', by: state.session.name});
     render();
     alert('Se eliminaron los ' + count + ' equipos. Ya puedes importar tu lista nueva.');
@@ -1392,6 +1899,7 @@
     <div class="topbar">
       <div class="brand">${getLogoHtml()}<h1>Control de Inventario</h1></div>
       <div class="session-info">
+        ${fbBase() ? `<span id="live-dot" class="live-dot ${sync.streamOpen ? 'on' : 'off'}" title="Conectado en vivo con la base de datos"></span>` : ''}
         <span class="role-pill ${s.role}">${s.role === 'admin' ? 'Admin · '+escapeHtml(s.name) : 'Espectador'}</span>
         <button id="logout-btn" class="btn-secondary" style="padding:6px 12px; font-size:12px;">Salir</button>
       </div>
@@ -1884,6 +2392,24 @@
     </table></div>`;
   }
 
+  function renderMasterModal(){
+    return `
+    <div class="modal-overlay" id="master-overlay">
+      <div class="modal-box">
+        <h3 style="font-size:15px; margin-bottom:6px;">Clave maestra</h3>
+        <div class="help-note" style="margin-bottom:12px;">Escribe la clave maestra para poder cambiar los nombres y PINs de los administradores.</div>
+        <form id="master-form">
+          <div class="field"><input id="master-input" type="password" placeholder="Clave maestra" autocomplete="off"></div>
+          ${state.masterModalErr ? `<div class="err-msg" id="master-err">${escapeHtml(state.masterModalErr)}</div>` : ''}
+          <div style="display:flex; gap:10px; margin-top:12px;">
+            <button type="button" id="master-cancel" class="btn-secondary" style="flex:1;">Cancelar</button>
+            <button type="submit" class="btn-primary" style="flex:1;">Desbloquear</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  }
+
   function renderConfig(){
     const connected = !!(state.config.firebaseUrl);
     const brand = state.config.branding || {logo:null, accent:null, headerBg:null, bg:null};
@@ -1933,15 +2459,35 @@
       <div class="help-note">Pega aquí la URL que te dio Firebase al crear tu Realtime Database. En cuanto la guardes, tu bot de Telegram podrá leer el inventario. Ten en cuenta que con las reglas de "modo de prueba" cualquiera con esta URL puede ver los datos — no la compartas fuera de tu equipo.</div>
     </div>
     <h3 style="margin-bottom:14px;">Administradores</h3>
-    <table style="margin-bottom:24px;">
-      <thead><tr><th>Nombre</th><th>PIN</th></tr></thead>
-      <tbody>
-        ${state.config.admins.map((a,idx)=>`
-          <tr><td>${escapeHtml(a.name)}</td><td class="mono">${escapeHtml(a.pin)}</td></tr>
+    <div class="ticket" style="max-width:520px; margin:0 0 24px; padding:20px;">
+      ${adminsAreUnlocked() ? `
+        <form id="admins-form">
+          ${state.config.admins.map((a,i)=>`
+            <div style="margin-bottom:14px;">
+              <div style="font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Administrador ${i+1}</div>
+              <div class="date-row">
+                <div class="field" style="margin-bottom:0;"><label>Nombre</label><input id="adm-name-${i}" value="${escapeHtml(a.name)}" autocomplete="off"></div>
+                <div class="field" style="margin-bottom:0;"><label>PIN</label><input id="adm-pin-${i}" value="${escapeHtml(a.pin)}" maxlength="12" autocomplete="off"></div>
+              </div>
+            </div>
+          `).join('')}
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:6px;">
+            <button type="submit" id="admins-save" class="btn-primary">Guardar cambios</button>
+            ${state.session && state.session.master ? '' : `<button type="button" id="admins-lock" class="btn-secondary">Bloquear</button>`}
+          </div>
+          <div class="help-note">Cada PIN debe tener al menos 4 caracteres (letras o números) y ser distinto de los otros.</div>
+        </form>
+      ` : `
+        ${state.config.admins.map(a=>`
+          <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border);">
+            <span>${escapeHtml(a.name)}</span><span class="mono" style="color:var(--muted);">••••</span>
+          </div>
         `).join('')}
-      </tbody>
-    </table>
-    <div class="help-note">Para cambiar nombres o PINs, dilo aquí en el chat y ajusto el archivo, o edítalo directo en el código de la app.</div>
+        <div style="margin-top:14px;"><button id="unlock-admins-btn" class="btn-secondary">🔑 Cambiar nombres o PINs</button></div>
+        <div class="help-note">Por seguridad los PINs no se muestran. Para cambiarlos se necesita la clave maestra.</div>
+      `}
+    </div>
+    ${state.masterModalOpen ? renderMasterModal() : ''}
     <h3 style="margin:24px 0 14px;">Categorías</h3>
     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
       ${state.config.categories.map(c=>`<span class="status-badge bodega">${escapeHtml(c)}</span>`).join('')}
@@ -2094,6 +2640,9 @@
         state.tab = btn.dataset.tab;
         state.altaDraft = null;
         state.lastScanMsg = null;
+        state.adminsUnlocked = false;
+        state.masterModalOpen = false;
+        state.masterModalErr = '';
         render();
       });
     });
@@ -2335,7 +2884,7 @@
           category = otherVal;
           if(!state.config.categories.includes(category)){
             state.config.categories.push(category);
-            saveConfig();
+            saveConfig(['categories']);
           }
         }
         const draft = {
@@ -2358,7 +2907,7 @@
       const box = document.createElement('div');
       box.style.background='#fff'; box.style.display='inline-block'; box.style.padding='8px'; box.style.borderRadius='4px';
       qrPreview.appendChild(box);
-      new QRCode(box, {text: state.altaDraft.code, width:120, height:120});
+      drawQR(box, state.altaDraft.code, 120);
     }
 
     if(state.tab==='etiquetas'){
@@ -2366,7 +2915,7 @@
         const box = document.getElementById('qr-'+cssSafe(it.code));
         if(box && !box.dataset.rendered){
           box.dataset.rendered = '1';
-          new QRCode(box, {text: it.code, width:100, height:100});
+          drawQR(box, it.code, 100);
         }
       });
       app.querySelectorAll('[data-print-code]').forEach(cb=>{
@@ -2395,7 +2944,7 @@
             codeDiv.textContent = it.code;
             card.appendChild(codeDiv);
             printGrid.appendChild(card);
-            new QRCode(qrBox, {text: it.code, width:110, height:110});
+            drawQR(qrBox, it.code, 110);
           });
           document.getElementById('print-area').classList.add('show');
           setTimeout(()=>{
@@ -2413,11 +2962,37 @@
         const val = new FormData(addCatForm).get('newcat').trim();
         if(val && !state.config.categories.includes(val)){
           state.config.categories.push(val);
-          saveConfig();
+          saveConfig(['categories']);
           render();
         }
       });
     }
+
+    const unlockAdminsBtn = document.getElementById('unlock-admins-btn');
+    if(unlockAdminsBtn) unlockAdminsBtn.addEventListener('click', openMasterModal);
+    const masterForm = document.getElementById('master-form');
+    if(masterForm){
+      masterForm.addEventListener('submit', e=>{
+        e.preventDefault();
+        tryUnlockAdmins(document.getElementById('master-input').value.trim());
+      });
+      const masterInput = document.getElementById('master-input');
+      if(masterInput) masterInput.focus();
+    }
+    const masterCancel = document.getElementById('master-cancel');
+    if(masterCancel) masterCancel.addEventListener('click', closeMasterModal);
+    const adminsForm = document.getElementById('admins-form');
+    if(adminsForm){
+      adminsForm.addEventListener('submit', e=>{
+        e.preventDefault();
+        saveAdminChanges([0,1,2].map(i => ({
+          name: document.getElementById('adm-name-'+i).value,
+          pin: document.getElementById('adm-pin-'+i).value
+        })));
+      });
+    }
+    const adminsLock = document.getElementById('admins-lock');
+    if(adminsLock) adminsLock.addEventListener('click', lockAdmins);
 
     const importFileInput = document.getElementById('import-file-input');
     if(importFileInput){
@@ -2486,6 +3061,7 @@
     if(el){ const pos = el.value.length; el.focus(); el.setSelectionRange(pos,pos); }
   }
 
+  initSyncListeners();
   loadAll();
 })();
 </script>
