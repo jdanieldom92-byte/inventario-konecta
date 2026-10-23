@@ -310,6 +310,7 @@
   let state = {
     loading: true,
     firebaseDenied: false,
+    firebaseUnreachable: false,
     items: [],
     log: [],
     events: [],
@@ -379,9 +380,22 @@
         state.firebaseDenied = true;
         return null;
       }
-      if(!res.ok) return null;
-      return await res.json();
-    }catch(e){ return null; }
+      if(!res.ok){ state.firebaseUnreachable = true; return null; }
+      return await res.json(); // null = de verdad no hay configuración todavía
+    }catch(e){
+      state.firebaseUnreachable = true; // sin conexión: NO es lo mismo que "no hay configuración"
+      return null;
+    }
+  }
+  // Antes de crear una configuración nueva, se confirma que de verdad no exista una (para no sobreescribir la real).
+  async function probeRemoteConfig(){
+    if(!DEFAULT_FIREBASE_URL) return 'missing';
+    try{
+      const res = await fetch(DEFAULT_FIREBASE_URL.replace(/\/$/,'') + '/config.json');
+      if(res.status === 401 || res.status === 403) return 'denied';
+      if(!res.ok) return 'error';
+      return (await res.json()) ? 'exists' : 'missing';
+    }catch(e){ return 'error'; }
   }
   async function safeGet(key, shared){
     try{ return await window.storage.get(key, shared); }
@@ -938,7 +952,7 @@
   async function loadAll(){
     // 1. Configuración desde Firebase (funciona en cualquier navegador, dentro o fuera de Claude)
     state.config = await fetchConfigFromUrl(DEFAULT_FIREBASE_URL);
-    if(state.firebaseDenied){
+    if(state.firebaseDenied || state.firebaseUnreachable){
       state.loading = false;
       render();
       return;
@@ -962,6 +976,14 @@
     // 3. Datos: en vivo desde Firebase (se queda escuchando cambios), o locales si no hay Firebase
     if(state.config && state.config.firebaseUrl){
       await startSync();
+      if(!sync.gotInitial){
+        // No llegó la lectura inicial: no se muestra un inventario vacío ni se escribe nada
+        stopSync();
+        state.firebaseUnreachable = true;
+        state.loading = false;
+        render();
+        return;
+      }
       if(!sync.tree.config) needsSave = true; // Firebase aún no tenía la configuración: se sube
     }else{
       await loadOperationalData();
@@ -1058,6 +1080,22 @@
     alert('Listo, se actualizaron los administradores.' + (fbBase() ? ' Los demás dispositivos lo reciben al momento.' : ''));
   }
   async function doSetup(admins){
+    state.loading = true;
+    render();
+    const probe = await probeRemoteConfig();
+    if(probe === 'denied' || probe === 'error'){
+      // No se puede comprobar si ya existe una configuración: no se crea nada
+      state.config = null;
+      if(probe === 'denied') state.firebaseDenied = true; else state.firebaseUnreachable = true;
+      state.loading = false;
+      render();
+      return;
+    }
+    if(probe === 'exists'){
+      // Mientras tanto otro dispositivo ya creó la configuración real: se usa esa, sin sobreescribirla
+      await loadAll();
+      return;
+    }
     state.config = {admins: admins, categories: DEFAULT_CATEGORIES.slice(), firebaseUrl: DEFAULT_FIREBASE_URL, brandingInit: true, branding: {logo:null, accent:null, headerBg:null, bg:null}};
     state.loading = true;
     render();
@@ -2567,6 +2605,17 @@
         </div>
       </div>`;
     }
+    if(state.firebaseUnreachable){
+      return `
+      <div class="center-screen">
+        <div class="ticket">
+          <h2>Sin conexión con la base de datos</h2>
+          <div class="sub">No se pudo leer tu inventario. Tus datos no se perdieron: siguen guardados en Firebase.</div>
+          <div class="help-note" style="margin-bottom:16px;">Revisa tu internet. En el celular prueba cambiar entre Wi-Fi y datos móviles, y desactiva VPN o bloqueadores de anuncios para esta página. Por seguridad, la app no te deja configurar nada nuevo mientras no pueda comprobar lo que ya existe.</div>
+          <button id="retry-firebase-btn" class="btn-primary" style="width:100%;">Reintentar</button>
+        </div>
+      </div>`;
+    }
     if(!state.config){
       return renderSetup();
     }
@@ -2596,6 +2645,7 @@
     if(retryFirebaseBtn){
       retryFirebaseBtn.addEventListener('click', ()=>{
         state.firebaseDenied = false;
+        state.firebaseUnreachable = false;
         state.loading = true;
         render();
         loadAll();
